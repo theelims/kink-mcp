@@ -14,41 +14,13 @@
 
 ### 前置要求
 
-- 🐍 Python >= 3.10
 - 📡 电脑蓝牙（支持 BLE）
 - 🔋 DG-Lab 郊狼 3.0 脉冲主机
 - 📦 [uv](https://docs.astral.sh/uv/getting-started/installation/) 包管理器
 
-### 安装步骤
-
-```bash
-# 克隆项目
-git clone https://github.com/ChengAoShen/DG-MCP.git
-cd DG-MCP
-
-# 安装依赖
-uv sync
-```
-
 ## 🚀 使用方法
 
 ### 1️⃣ 配置 MCP 客户端
-
-#### 🖥️ 新电脑快速开始
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/ChengAoShen/DG-MCP.git
-cd DG-MCP
-
-# 2. 安装依赖
-uv sync
-
-# 3. 添加到 Claude Code
-claude mcp add dg-lab -- uv --directory /path/to/DG-MCP run dg-mcp
-```
-
-> 💡 前提：新电脑上已安装 [uv](https://docs.astral.sh/uv/) 和 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 #### 🖥️ Claude Desktop
 
@@ -64,8 +36,8 @@ claude mcp add dg-lab -- uv --directory /path/to/DG-MCP run dg-mcp
 {
   "mcpServers": {
     "dg-lab": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/DG-MCP", "run", "dg-mcp"]
+      "command": "uvx",
+      "args": ["dg-mcp"]
     }
   }
 }
@@ -74,7 +46,7 @@ claude mcp add dg-lab -- uv --directory /path/to/DG-MCP run dg-mcp
 #### 💻 Claude Code
 
 ```bash
-claude mcp add dg-lab -- uv --directory /path/to/DG-MCP run dg-mcp
+claude mcp add dg-lab -- uvx dg-mcp
 ```
 
 > 🗑️ 移除：`claude mcp remove dg-lab`
