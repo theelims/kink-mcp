@@ -1,32 +1,32 @@
-# 🐺 DG-MCP — 让 AI 控制郊狼 3.0
+# 🐺 DG-MCP — Let AI Control the Coyote 3.0
 
-> 🔌 基于 MCP (Model Context Protocol) 的 DG-Lab 郊狼 3.0 脉冲主机控制器，让 Claude 等 AI 通过蓝牙直连控制设备。
+> 🔌 A DG-Lab Coyote 3.0 pulse device controller based on MCP (Model Context Protocol), enabling AI like Claude to control the device directly via Bluetooth.
 
-## ✨ 特性
+## ✨ Features
 
-- 🦷 **BLE 直连** — 无需 APP，电脑蓝牙直接连接郊狼 3.0
-- 🤖 **MCP 协议** — Claude Desktop / Claude Code 等 AI 客户端即插即用
-- 🎛️ **10 个 Tools** — 扫描、连接、强度控制、波形播放、自定义波形设计、状态查询
-- 🌊 **6 种预设波形** — 呼吸、潮汐、低/中/高脉冲、敲击
-- 🔒 **安全保护** — 强度软上限，防止 AI 误操作
+- 🦷 **Direct BLE Connection** — No app required; connect directly to the Coyote 3.0 via computer Bluetooth
+- 🤖 **MCP Protocol** — Plug-and-play with AI clients like Claude Desktop / Claude Code
+- 🎛️ **10 Tools** — Scan, connect, strength control, waveform playback, custom waveform design, status query
+- 🌊 **6 Preset Waveforms** — Breath, tide, low/mid/high pulse, tap
+- 🔒 **Safety Protection** — Soft strength limit to prevent AI misoperation
 
-## 📦 安装
+## 📦 Installation
 
-### 前置要求
+### Prerequisites
 
-- 📡 电脑蓝牙（支持 BLE）
-- 🔋 DG-Lab 郊狼 3.0 脉冲主机
-- 📦 [uv](https://docs.astral.sh/uv/getting-started/installation/) 包管理器
+- 📡 Computer with Bluetooth (BLE support)
+- 🔋 DG-Lab Coyote 3.0 pulse device
+- 📦 [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
 
-## 🚀 使用方法
+## 🚀 Usage
 
-### 1️⃣ 配置 MCP 客户端
+### 1️⃣ Configure the MCP Client
 
 #### 🖥️ Claude Desktop
 
-编辑 `claude_desktop_config.json`，文件位置因操作系统而异：
+Edit `claude_desktop_config.json`. The file location varies by operating system:
 
-| 操作系统 | 路径 |
+| OS | Path |
 |----------|------|
 | 🍎 macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | 🪟 Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
@@ -49,68 +49,68 @@
 claude mcp add dg-lab -- uvx dg-mcp
 ```
 
-> 🗑️ 移除：`claude mcp remove dg-lab`
+> 🗑️ Remove: `claude mcp remove dg-lab`
 
-### 2️⃣ 开机连接
+### 2️⃣ Power On and Connect
 
-1. 🔋 长按郊狼 3.0 电源键开机
-2. 📡 确保电脑蓝牙已开启（**无需手动配对**，BLE 直连）
-3. 🤖 在 AI 对话中说："扫描并连接郊狼设备"
+1. 🔋 Long-press the Coyote 3.0 power button to turn it on
+2. 📡 Ensure your computer's Bluetooth is enabled (**no manual pairing needed**, BLE connects directly)
+3. 🤖 In your AI conversation, say: "Scan and connect to the Coyote device"
 
-### 3️⃣ AI 自动完成
+### 3️⃣ AI Handles the Rest
 
-AI 会按以下流程操作：
+The AI will follow this flow:
 
 ```
-🔍 scan()          → 扫描附近的郊狼设备
-🔗 connect(地址)    → 连接设备
-⚡ set_strength()   → 设置通道强度
-🌊 send_wave()      → 发送预设/自定义波形
-🎨 design_wave()    → 设计多步变化波形
+🔍 scan()            → Scan for nearby Coyote devices
+🔗 connect(address)  → Connect to the device
+⚡ set_strength()    → Set channel strength
+🌊 send_wave()       → Send a preset or custom waveform
+🎨 design_wave()     → Design a multi-step waveform
 ```
 
-## 🎛️ MCP Tools 一览
+## 🎛️ MCP Tools Overview
 
-| Tool | 说明 | 示例 |
-|------|------|------|
-| 🔍 `scan` | 扫描附近郊狼设备 | `scan(timeout=5)` |
-| 🔗 `connect` | 连接设备 | `connect("AA:BB:CC:DD:EE:FF")` |
-| ❌ `disconnect` | 断开连接 | `disconnect()` |
-| ⚡ `set_strength` | 设置通道强度 (0~200) | `set_strength("A", 10)` |
-| ➕ `add_strength` | 增减强度 | `add_strength("A", 5)` |
-| 🔒 `set_strength_limit` | 设置强度软上限（断电保存） | `set_strength_limit(50, 50)` |
-| 🌊 `send_wave` | 发送预设/自定义波形 | `send_wave("A", preset="breath")` |
-| 🎨 `design_wave` | 设计多步变化波形 | `design_wave("A", steps=[...])` |
-| ⏹️ `stop_wave` | 停止波形（省略通道停止全部） | `stop_wave("A")` / `stop_wave()` |
-| 📊 `get_status` | 查询设备状态 | `get_status()` |
+| Tool | Description | Example |
+|------|-------------|---------|
+| 🔍 `scan` | Scan for nearby Coyote devices | `scan(timeout=5)` |
+| 🔗 `connect` | Connect to a device | `connect("AA:BB:CC:DD:EE:FF")` |
+| ❌ `disconnect` | Disconnect | `disconnect()` |
+| ⚡ `set_strength` | Set channel strength (0~200) | `set_strength("A", 10)` |
+| ➕ `add_strength` | Increase or decrease strength | `add_strength("A", 5)` |
+| 🔒 `set_strength_limit` | Set soft strength limit (persists after power off) | `set_strength_limit(50, 50)` |
+| 🌊 `send_wave` | Send a preset or custom waveform | `send_wave("A", preset="breath")` |
+| 🎨 `design_wave` | Design a multi-step waveform | `design_wave("A", steps=[...])` |
+| ⏹️ `stop_wave` | Stop waveform (omit channel to stop all) | `stop_wave("A")` / `stop_wave()` |
+| 📊 `get_status` | Query device status | `get_status()` |
 
-## 🌊 预设波形
+## 🌊 Preset Waveforms
 
-| 名称 | 说明 | 体感 |
-|------|------|------|
-| 🫁 `breath` | 呼吸 | 缓慢起伏，从无到强再回落 |
-| 🌊 `tide` | 潮汐 | 频率渐变，波浪感 |
-| 💤 `pulse_low` | 低脉冲 | 轻柔持续 |
-| ⚡ `pulse_mid` | 中脉冲 | 中等持续 |
-| 🔥 `pulse_high` | 高脉冲 | 强烈持续 |
-| 👆 `tap` | 敲击 | 有节奏的间歇脉冲 |
+| Name | Description | Feel |
+|------|-------------|------|
+| 🫁 `breath` | Breath | Slow rise and fall, from nothing to strong and back |
+| 🌊 `tide` | Tide | Gradually changing frequency, wave-like sensation |
+| 💤 `pulse_low` | Low pulse | Gentle and continuous |
+| ⚡ `pulse_mid` | Mid pulse | Moderate and continuous |
+| 🔥 `pulse_high` | High pulse | Intense and continuous |
+| 👆 `tap` | Tap | Rhythmic intermittent pulses |
 
-### 🎨 自定义波形
+### 🎨 Custom Waveform
 
-除了预设，还可以用 `send_wave` 自定义固定频率和强度：
+In addition to presets, you can use `send_wave` to define a fixed frequency and intensity:
 
 ```
 send_wave("A", frequency=100, intensity=50, duration_frames=10, loop=True)
 ```
 
-- `frequency`: 波形频率 10~1000ms（值越小频率越高）
-- `intensity`: 波形强度 0~100
-- `duration_frames`: 持续帧数，每帧 100ms（默认 10 = 1 秒）
-- `loop`: 是否循环播放（默认 `True`）
+- `frequency`: Waveform frequency 10~1000ms (lower value = higher frequency)
+- `intensity`: Waveform intensity 0~100
+- `duration_frames`: Duration in frames, each frame is 100ms (default 10 = 1 second)
+- `loop`: Whether to loop (default `True`)
 
-### 🎼 设计多步波形
+### 🎼 Design Multi-Step Waveforms
 
-使用 `design_wave` 可以创建频率和强度随时间变化的复杂波形，每个 step 持续 100ms：
+Use `design_wave` to create complex waveforms where frequency and intensity change over time. Each step lasts 100ms:
 
 ```
 design_wave("A", steps=[
@@ -123,60 +123,60 @@ design_wave("A", steps=[
 ], loop=True)
 ```
 
-- `freq`: 脉冲频率 10~1000ms（值越小频率越高）
-- `intensity`: 强度 0~100（0=无输出，100=最强）
-- `repeat`: 该步骤重复次数（默认 1）
-- `loop`: 是否循环播放（默认 `True`，设为 `False` 播放一次后停止）
+- `freq`: Pulse frequency 10~1000ms (lower value = higher frequency)
+- `intensity`: Intensity 0~100 (0 = no output, 100 = maximum)
+- `repeat`: Number of times to repeat this step (default 1)
+- `loop`: Whether to loop (default `True`; set to `False` to play once and stop)
 
-> 💡 AB 双通道可同时独立播放不同波形
+> 💡 Both A and B channels can play different waveforms simultaneously and independently
 
-## ⚠️ 安全须知
+## ⚠️ Safety Notice
 
-> 🚨 **重要！请务必阅读！**
+> 🚨 **Important! Please read carefully!**
 
-1. ⚡ **从低强度开始** — 首次使用建议强度设为 `5~10`，逐步增加
-2. 🔒 **设置软上限** — 使用 `set_strength_limit` 限制最大强度，防止意外
-3. 🚫 **紧急停止** — 直接关闭郊狼电源即可立即停止所有输出
-4. 💓 **禁止区域** — 请勿将电极放置在心脏区域或头颈部
-5. 🤖 **AI 不是人** — AI 无法感知你的实际体验，请随时手动调整或停止
+1. ⚡ **Start at low intensity** — For first use, set strength to `5~10` and increase gradually
+2. 🔒 **Set a soft limit** — Use `set_strength_limit` to cap the maximum strength and prevent accidents
+3. 🚫 **Emergency stop** — Turn off the Coyote power directly to immediately stop all output
+4. 💓 **Restricted areas** — Do not place electrodes near the heart, neck, or head
+5. 🤖 **AI is not human** — AI cannot perceive your actual experience; adjust or stop manually at any time
 
-## 🏗️ 项目结构
+## 🏗️ Project Structure
 
 ```
 DG-MCP/
-├── 📄 pyproject.toml          # 项目配置 + 依赖
+├── 📄 pyproject.toml          # Project config + dependencies
 ├── 📦 dg_mcp/
-│   ├── 📡 protocol.py         # V3 BLE 协议 (B0/BF 指令)
-│   ├── 🌊 waves.py            # 预设波形 + 自定义波形
-│   ├── 🦷 device.py           # BLE 设备管理 (扫描/连接/控制)
-│   └── 🤖 server.py           # MCP Server (10 个 Tools)
+│   ├── 📡 protocol.py         # V3 BLE protocol (B0/BF commands)
+│   ├── 🌊 waves.py            # Preset waveforms + custom waveforms
+│   ├── 🦷 device.py           # BLE device management (scan/connect/control)
+│   └── 🤖 server.py           # MCP Server (10 Tools)
 ```
 
-## 🔧 技术细节
+## 🔧 Technical Details
 
-- **通信协议**: DG-Lab Coyote V3 BLE 协议
-- **BLE 库**: [bleak](https://github.com/hbldh/bleak) — 跨平台 BLE
+- **Communication Protocol**: DG-Lab Coyote V3 BLE protocol
+- **BLE Library**: [bleak](https://github.com/hbldh/bleak) — cross-platform BLE
 - **MCP SDK**: [mcp](https://modelcontextprotocol.io/) — Model Context Protocol
-- **B0 指令**: 20 字节，每 100ms 写入，同时控制 AB 双通道强度 + 波形
-- **BF 指令**: 7 字节，设置强度软上限（断电保存）
+- **B0 Command**: 20 bytes, written every 100ms, controls both A/B channel strength + waveform simultaneously
+- **BF Command**: 7 bytes, sets the soft strength limit (persists after power off)
 
-## 🖥️ 平台支持
+## 🖥️ Platform Support
 
-| 平台 | 状态 | 说明 |
-|------|------|------|
-| 🪟 Windows | ✅ 支持 | 直接使用 |
-| 🍎 macOS | ✅ 支持 | 直接使用 |
-| 🐧 Linux | ✅ 支持 | 需要 BlueZ |
-| 🐧 WSL2 | ⚠️ 需配置 | 需要 USB 蓝牙透传 ([usbipd](https://github.com/dorssel/usbipd-win)) |
+| Platform | Status | Notes |
+|----------|--------|-------|
+| 🪟 Windows | ✅ Supported | Works out of the box |
+| 🍎 macOS | ✅ Supported | Works out of the box |
+| 🐧 Linux | ✅ Supported | Requires BlueZ |
+| 🐧 WSL2 | ⚠️ Needs setup | Requires USB Bluetooth passthrough ([usbipd](https://github.com/dorssel/usbipd-win)) |
 
-## 📜 致谢
+## 📜 Acknowledgements
 
-- [DG-LAB-OPENSOURCE](https://github.com/DG-LAB-OPENSOURCE/DG-LAB-OPENSOURCE) — 官方开源 BLE 协议
-- [Model Context Protocol](https://modelcontextprotocol.io/) — MCP 协议规范
+- [DG-LAB-OPENSOURCE](https://github.com/DG-LAB-OPENSOURCE/DG-LAB-OPENSOURCE) — Official open-source BLE protocol
+- [Model Context Protocol](https://modelcontextprotocol.io/) — MCP protocol specification
 
-## 🚨 免责声明
+## 🚨 Disclaimer
 
-> **本项目仅供学习交流使用，不得用于任何违法或不当用途。使用者应自行承担使用本项目所产生的一切风险和责任，项目作者不对因使用本项目而导致的任何直接或间接损害承担责任。**
+> **This project is intended for educational and communication purposes only and must not be used for any illegal or improper purposes. Users assume all risks and responsibilities arising from the use of this project. The project author is not liable for any direct or indirect damages resulting from its use.**
 
 ## 📄 License
 
