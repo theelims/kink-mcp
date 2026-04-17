@@ -39,6 +39,16 @@ from .waves import WaveFrame
 logger = logging.getLogger(__name__)
 
 
+def _pct_to_raw(pct: int) -> int:
+    """Convert 0–100% to internal 0–200 range."""
+    return round(max(0, min(100, pct)) * 2)
+
+
+def _raw_to_pct(raw: int) -> int:
+    """Convert internal 0–200 range to 0–100%."""
+    return round(raw / 2)
+
+
 @dataclass
 class DeviceState:
     """Current device state."""
@@ -59,12 +69,13 @@ class DeviceState:
     _absolute_b: int | None = None
 
     # Wave playback state per channel
+    # loop: 0 = infinite, N > 0 = N full cycles remaining
     wave_a: list[WaveFrame] = field(default_factory=list)
     wave_b: list[WaveFrame] = field(default_factory=list)
     wave_a_index: int = 0
     wave_b_index: int = 0
-    wave_a_loop: bool = True
-    wave_b_loop: bool = True
+    wave_a_loop: int = 0
+    wave_b_loop: int = 0
 
     # V3 sequence tracking
     _seq: int = 0
@@ -196,9 +207,13 @@ class CoyoteDevice:
         self,
         channel: str,
         frames: list[WaveFrame],
-        loop: bool = True,
+        loop: int = 0,
     ) -> None:
-        """Start playing waveform frames on a channel."""
+        """Start playing waveform frames on a channel.
+
+        Args:
+            loop: 0 = infinite, N > 0 = play N full cycles then stop.
+        """
         if channel.upper() == "A":
             self.state.wave_a = frames
             self.state.wave_a_index = 0
@@ -246,6 +261,28 @@ class CoyoteDevice:
         data = build_bf(self.state.limit_a, self.state.limit_b)
         await self._client.write_gatt_char(WRITE_UUID, data)
         logger.debug("BF written: limit_a=%d limit_b=%d", self.state.limit_a, self.state.limit_b)
+
+    def _advance_wave(
+        self,
+        wave: list[WaveFrame],
+        idx: int,
+        loop: int,
+    ) -> tuple[list[WaveFrame], int, int]:
+        """Advance wave index, handling end-of-cycle loop logic.
+
+        Returns (wave, next_idx, next_loop).
+        """
+        next_idx = idx + 1
+        if next_idx < len(wave):
+            return wave, next_idx, loop
+
+        # End of cycle
+        if loop == 0:
+            return wave, 0, 0          # infinite: restart
+        elif loop == 1:
+            return [], 0, 0            # last cycle done: clear
+        else:
+            return wave, 0, loop - 1   # decrement remaining cycles
 
     def _build_next_b0(self) -> bytes:
         """Build the next B0 instruction from current state (V3)."""
@@ -308,20 +345,15 @@ class CoyoteDevice:
             mode_a = STRENGTH_NONE
             mode_b = STRENGTH_NONE
 
-        # Wave data for A channel — encode raw period_ms to V3 format at write time
+        # Wave data for A channel
         if self.state.wave_a:
             idx = self.state.wave_a_index
             frame = self.state.wave_a[idx]
             wave_freq_a = tuple(encode_frequency(f) for f in frame.freq)
             wave_int_a = frame.intensity
-            next_idx = idx + 1
-            if next_idx >= len(self.state.wave_a):
-                if self.state.wave_a_loop:
-                    next_idx = 0
-                else:
-                    self.state.wave_a = []
-                    next_idx = 0
-            self.state.wave_a_index = next_idx
+            self.state.wave_a, self.state.wave_a_index, self.state.wave_a_loop = (
+                self._advance_wave(self.state.wave_a, idx, self.state.wave_a_loop)
+            )
         else:
             wave_freq_a = WAVE_FREQ_ZERO
             wave_int_a = WAVE_INACTIVE
@@ -332,14 +364,9 @@ class CoyoteDevice:
             frame = self.state.wave_b[idx]
             wave_freq_b = tuple(encode_frequency(f) for f in frame.freq)
             wave_int_b = frame.intensity
-            next_idx = idx + 1
-            if next_idx >= len(self.state.wave_b):
-                if self.state.wave_b_loop:
-                    next_idx = 0
-                else:
-                    self.state.wave_b = []
-                    next_idx = 0
-            self.state.wave_b_index = next_idx
+            self.state.wave_b, self.state.wave_b_index, self.state.wave_b_loop = (
+                self._advance_wave(self.state.wave_b, idx, self.state.wave_b_loop)
+            )
         else:
             wave_freq_b = WAVE_FREQ_ZERO
             wave_int_b = WAVE_INACTIVE
@@ -411,31 +438,32 @@ class CoyoteDevice:
         """Get the 3-byte V2 waveform packet for the current frame of a channel."""
         if channel == "A":
             wave = self.state.wave_a
-            idx_attr, loop_attr = "wave_a_index", "wave_a_loop"
         else:
             wave = self.state.wave_b
-            idx_attr, loop_attr = "wave_b_index", "wave_b_loop"
 
         if not wave:
             return build_v2_pwm_wave(10, 0)  # zero-intensity: no stimulation
 
-        idx = getattr(self.state, idx_attr)
+        if channel == "A":
+            idx = self.state.wave_a_index
+            loop = self.state.wave_a_loop
+        else:
+            idx = self.state.wave_b_index
+            loop = self.state.wave_b_loop
+
         frame = wave[idx]
-        # WaveFrame.freq stores raw period_ms; intensity stores 0-100 pct
         period_ms = frame.freq[0]
         intensity_pct = frame.intensity[0]
 
-        next_idx = idx + 1
-        if next_idx >= len(wave):
-            if getattr(self.state, loop_attr):
-                next_idx = 0
-            else:
-                if channel == "A":
-                    self.state.wave_a = []
-                else:
-                    self.state.wave_b = []
-                next_idx = 0
-        setattr(self.state, idx_attr, next_idx)
+        new_wave, new_idx, new_loop = self._advance_wave(wave, idx, loop)
+        if channel == "A":
+            self.state.wave_a = new_wave
+            self.state.wave_a_index = new_idx
+            self.state.wave_a_loop = new_loop
+        else:
+            self.state.wave_b = new_wave
+            self.state.wave_b_index = new_idx
+            self.state.wave_b_loop = new_loop
 
         return build_v2_pwm_wave(period_ms, intensity_pct)
 
@@ -486,4 +514,156 @@ class CoyoteDevice:
             "battery": self.state.battery,
             "wave_a_active": len(self.state.wave_a) > 0,
             "wave_b_active": len(self.state.wave_b) > 0,
+        }
+
+
+class DeviceManager:
+    """Manages multiple concurrent Coyote device connections via aliases."""
+
+    def __init__(self) -> None:
+        self._devices: list[CoyoteDevice] = []
+        self._alias_map: dict[str, list[tuple[CoyoteDevice, str]]] = {}
+
+    async def scan(self, timeout: float = 5.0) -> list[dict]:
+        """Scan for nearby Coyote devices (V2 and V3).
+
+        Returns list of {name, address, version} dicts.
+        """
+        devices = await BleakScanner.discover(timeout=timeout)
+        results = []
+        for d in devices:
+            name = d.name or ""
+            if name.startswith(DEVICE_NAME_PREFIX):
+                results.append({"name": name, "address": d.address, "version": "v3"})
+            elif name == V2_DEVICE_NAME:
+                results.append({"name": name, "address": d.address, "version": "v2"})
+        return results
+
+    async def connect(self, address: str, alias_a: str, alias_b: str) -> tuple[str, str]:
+        """Connect to a Coyote device, auto-detecting V2 or V3, and assign channel aliases.
+
+        Args:
+            address: BLE address from scan results.
+            alias_a: Alias for channel A (e.g. "left_thigh", "butt").
+            alias_b: Alias for channel B (e.g. "right_thigh", "chest").
+
+        Returns:
+            (alias_a, alias_b) on success.
+        """
+        if not alias_a or not alias_b:
+            raise ValueError("Both alias_a and alias_b must be non-empty strings.")
+
+        ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
+        if ble_device is None:
+            raise ValueError(f"Device {address} not found. Make sure it is powered on.")
+
+        name = ble_device.name or ""
+        if name.startswith(DEVICE_NAME_PREFIX):
+            version = "v3"
+        elif name == V2_DEVICE_NAME:
+            version = "v2"
+        else:
+            raise ValueError(
+                f"Unrecognised device name '{name}' at {address}. "
+                "Expected a DG-Lab Coyote device."
+            )
+
+        dev = CoyoteDevice()
+        await dev.connect(address, version=version)
+
+        self._devices.append(dev)
+        self._alias_map.setdefault(alias_a, []).append((dev, "A"))
+        self._alias_map.setdefault(alias_b, []).append((dev, "B"))
+
+        logger.info("Registered aliases '%s' (A) and '%s' (B) for %s", alias_a, alias_b, address)
+        return alias_a, alias_b
+
+    async def disconnect_all(self) -> None:
+        """Disconnect all connected devices and clear all aliases."""
+        await asyncio.gather(
+            *[dev.disconnect() for dev in self._devices],
+            return_exceptions=True,
+        )
+        self._devices.clear()
+        self._alias_map.clear()
+
+    def _resolve(self, alias: str) -> list[tuple[CoyoteDevice, str]]:
+        """Resolve an alias to a list of (device, channel) pairs.
+
+        Raises ValueError if the alias is unknown or all matching devices are disconnected.
+        """
+        entries = self._alias_map.get(alias)
+        if not entries:
+            known = list(self._alias_map.keys())
+            raise ValueError(
+                f"Unknown alias '{alias}'. "
+                f"Connected aliases: {known if known else 'none'}"
+            )
+        active = [(dev, ch) for dev, ch in entries if dev.state.connected]
+        if not active:
+            raise ValueError(f"Alias '{alias}' exists but all its devices are disconnected.")
+        return active
+
+    def set_strength(self, alias: str, pct: int) -> None:
+        """Set absolute strength for all channels with this alias (0–100%)."""
+        raw = _pct_to_raw(pct)
+        for dev, ch in self._resolve(alias):
+            dev.set_strength(ch, raw)
+
+    def adjust_strength(self, alias: str, delta_pct: int) -> None:
+        """Increase or decrease strength for all channels with this alias (delta in %)."""
+        raw_delta = delta_pct * 2  # scale percent delta to 0–200 range
+        for dev, ch in self._resolve(alias):
+            dev.add_strength(ch, raw_delta)
+
+    async def set_strength_limit(self, alias: str, limit_pct: int) -> None:
+        """Set strength soft limit for all channels with this alias (0–100%)."""
+        raw = _pct_to_raw(limit_pct)
+        for dev, ch in self._resolve(alias):
+            if ch == "A":
+                await dev.set_strength_limit(raw, dev.state.limit_b)
+            else:
+                await dev.set_strength_limit(dev.state.limit_a, raw)
+
+    def send_wave(self, alias: str, frames: list[WaveFrame], loop: int = 0) -> None:
+        """Send waveform frames to all channels with this alias."""
+        for dev, ch in self._resolve(alias):
+            dev.send_wave(ch, frames, loop=loop)
+
+    def stop_wave(self, alias: str | None = None) -> None:
+        """Stop waveform on channels matching alias, or all channels if alias is None."""
+        if alias is None:
+            for dev in self._devices:
+                dev.stop_wave(None)
+        else:
+            for dev, ch in self._resolve(alias):
+                dev.stop_wave(ch)
+
+    def get_all_status(self) -> dict:
+        """Return alias-keyed status for all connected channels."""
+        aliases: dict[str, list[dict]] = {}
+        for alias, entries in self._alias_map.items():
+            channel_statuses = []
+            for dev, ch in entries:
+                s = dev.state
+                if ch == "A":
+                    strength_raw = s.strength_a
+                    limit_raw = s.limit_a
+                    wave_active = len(s.wave_a) > 0
+                else:
+                    strength_raw = s.strength_b
+                    limit_raw = s.limit_b
+                    wave_active = len(s.wave_b) > 0
+                channel_statuses.append({
+                    "strength_pct": _raw_to_pct(strength_raw),
+                    "limit_pct": _raw_to_pct(limit_raw),
+                    "wave_active": wave_active,
+                    "battery": s.battery,
+                    "connected": s.connected,
+                })
+            aliases[alias] = channel_statuses
+
+        return {
+            "connected_devices": sum(1 for d in self._devices if d.state.connected),
+            "aliases": aliases,
         }
