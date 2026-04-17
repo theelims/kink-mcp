@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "bleak>=0.22.0",
+    "humanize>=4.0.0",
     "mcp[cli]>=1.0.0",
 ]
 

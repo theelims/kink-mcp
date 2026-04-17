@@ -1,24 +1,26 @@
-# 🐺 DG-MCP — Let AI Control the Coyote
+# 🐺 DG-MCP — Let AI Control the Coyote & Lovense
 
-> 🔌 A DG-Lab Coyote pulse device controller based on MCP (Model Context Protocol), enabling AI like Claude to control the device directly via Bluetooth.
+> 🔌 A DG-Lab Coyote and Lovense device controller based on MCP (Model Context Protocol), enabling AI like Claude to control the devices directly via Bluetooth.
 
 ## ✨ Features
 
-- 🦷 **Direct BLE Connection** — No app required; connect directly to the Coyote via computer Bluetooth
+- 🦷 **Direct BLE Connection** — No app required; connect directly to devices via computer Bluetooth
 - 🤖 **MCP Protocol** — Plug-and-play with AI clients like Claude Desktop / Claude Code
 - 🔀 **V2 & V3 Simultaneously** — Connect a Coyote 2 and Coyote 3 at the same time; device type is auto-detected
-- 🔌 **Multi-Device** — Connect multiple Coyote devices at once; each channel gets a descriptive alias
-- 🏷️ **Alias System** — Channels are identified by labels you choose (e.g. `"left_thigh"`, `"butt"`); shared aliases sync multiple channels automatically
-- 🎛️ **10 Tools** — Scan, connect, strength control, waveform playback, custom waveform design, status query
+- 📳 **Lovense Support** — Control Lovense vibration toys (Domi, Hush, Lush, Ferri, …) alongside Coyote devices
+- 🔌 **Multi-Device** — Connect multiple devices at once; each channel gets a descriptive alias
+- 🏷️ **Alias System** — Channels are identified by labels you choose (e.g. `"left_thigh"`, `"toy"`); shared aliases sync multiple channels automatically
+- 🎛️ **11 Tools** — Scan, connect, strength control, waveform playback, custom waveform design, vibration, status query
 - 🌊 **6 Preset Waveforms** — Breath, tide, low/mid/high pulse, tap
 - 🔒 **Safety Protection** — Soft strength limit to prevent AI misoperation
+- ⏱️ **Session Timer** — Track session start time and per-alias last-activity timestamps
 
 ## 📦 Installation
 
 ### Prerequisites
 
 - 📡 Computer with Bluetooth (BLE support)
-- 🔋 DG-Lab Coyote pulse device (V2 or V3)
+- 🔋 DG-Lab Coyote pulse device (V2 or V3) and/or a Lovense vibration toy
 - 📦 [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
 
 ## 🚀 Usage
@@ -56,53 +58,60 @@ claude mcp add dg-lab -- uvx dg-mcp
 
 ### 2️⃣ Power On and Connect
 
-1. 🔋 Long-press the Coyote power button to turn it on
+1. 🔋 Long-press the device power button to turn it on
 2. 📡 Ensure your computer's Bluetooth is enabled (**no manual pairing needed**, BLE connects directly)
-3. 🤖 In your AI conversation, say: "Scan and connect to the Coyote device"
+3. 🤖 In your AI conversation, say: "Scan and connect to my devices"
 
 ### 3️⃣ AI Handles the Rest
 
-The AI will follow this flow:
-
+**Coyote flow:**
 ```
-🔍 scan()                              → Scan for nearby Coyote devices
-🔗 connect(address, alias_a, alias_b)  → Connect and name the channels
-⚡ set_strength(alias, value)          → Set channel strength (0–100%)
-🌊 play_wave(alias, preset)            → Play a preset waveform
-🎨 design_wave(alias, steps)           → Design a multi-step waveform
+🔍 scan()                                      → Scan for nearby devices
+🔗 connect(address, alias_a, alias_b)          → Connect and name the channels
+⚡ set_strength(alias, value)                  → Set channel strength (0–100%)
+🌊 play_wave(alias, preset)                    → Play a preset waveform
+🎨 design_wave(alias, steps)                   → Design a multi-step waveform
+```
+
+**Lovense flow:**
+```
+🔍 scan()                                      → Scan for nearby devices
+🔗 connect(address, alias_a)                   → Connect (no alias_b needed)
+📳 vibrate(alias, strength)                    → Set vibration intensity (0–100%)
 ```
 
 ## 🏷️ Alias System
 
-Each device has two channels (A and B). When you connect, you assign a **free-form alias** to each channel — a label that describes the electrode placement:
+Each Coyote device has two channels (A and B). When you connect, you assign a **free-form alias** to each channel. Lovense toys have one channel and only need `alias_a`.
 
 ```
-connect("AA:BB:CC:DD:EE:FF", alias_a="left_thigh", alias_b="right_thigh")
-connect("CC:DD:EE:FF:00:11", alias_a="butt",        alias_b="chest")
+connect("AA:BB:CC:DD:EE:FF", alias_a="left_thigh", alias_b="right_thigh")  # Coyote
+connect("CC:DD:EE:FF:00:11", alias_a="toy")                                 # Lovense
 ```
 
 All subsequent commands use aliases instead of channel numbers:
 
 ```
 set_strength("left_thigh", 15)
-play_wave("butt", "breath")
-stop_wave("chest")
+play_wave("left_thigh", "breath")
+vibrate("toy", 40)
+stop_wave("right_thigh")
 ```
 
 ### Shared Aliases (Sync)
 
-Assigning the same alias to multiple channels causes them to receive every command together — they behave as a single entity:
+Assigning the same alias to multiple channels causes them to receive every command together:
 
 ```
 connect("AA:BB:CC:DD:EE:FF", alias_a="legs", alias_b="legs")  # both channels synced
 set_strength("legs", 20)   # sets both channels at once
 ```
 
-You can also sync channels across two different devices by giving them the same alias:
+You can also sync channels across two different devices:
 
 ```
-connect("AA:BB:CC:DD:EE:FF", alias_a="outer",  alias_b="inner")
-connect("CC:DD:EE:FF:00:11", alias_a="outer",  alias_b="lower")
+connect("AA:BB:CC:DD:EE:FF", alias_a="outer", alias_b="inner")
+connect("CC:DD:EE:FF:00:11", alias_a="outer", alias_b="lower")
 set_strength("outer", 25)  # sets both devices' 'outer' channels simultaneously
 ```
 
@@ -110,16 +119,28 @@ set_strength("outer", 25)  # sets both devices' 'outer' channels simultaneously
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| 🔍 `scan` | Scan for nearby Coyote devices | `scan(timeout=5)` |
-| 🔗 `connect` | Connect and assign channel aliases | `connect("AA:BB:...", "left_thigh", "right_thigh")` |
+| 🔍 `scan` | Scan for nearby Coyote and Lovense devices | `scan(timeout=5)` |
+| 🔗 `connect` | Connect and assign channel alias(es) | `connect("AA:BB:...", "left_thigh", "right_thigh")` |
 | ❌ `disconnect` | Disconnect all devices | `disconnect()` |
-| ⚡ `set_strength` | Set channel strength 0–100% | `set_strength("left_thigh", 10)` |
-| ➕ `adjust_strength` | Increase or decrease strength | `adjust_strength("left_thigh", 5)` |
-| 🔒 `set_strength_limit` | Set soft strength limit 0–100% | `set_strength_limit("left_thigh", 50)` |
-| 🌊 `play_wave` | Play a preset waveform | `play_wave("left_thigh", preset="breath")` |
-| 🎨 `design_wave` | Design a multi-step waveform | `design_wave("left_thigh", steps=[...])` |
+| ⚡ `set_strength` | Set Coyote channel strength 0–100% | `set_strength("left_thigh", 10)` |
+| ➕ `adjust_strength` | Increase or decrease Coyote strength | `adjust_strength("left_thigh", 5)` |
+| 🔒 `set_strength_limit` | Set soft strength limit 0–100% (Coyote) | `set_strength_limit("left_thigh", 50)` |
+| 📳 `vibrate` | Set Lovense vibration intensity 0–100% | `vibrate("toy", 40)` |
+| 🌊 `play_wave` | Play a preset waveform (Coyote) | `play_wave("left_thigh", preset="breath")` |
+| 🎨 `design_wave` | Design a multi-step waveform (Coyote) | `design_wave("left_thigh", steps=[...])` |
 | ⏹️ `stop_wave` | Stop waveform (omit alias to stop all) | `stop_wave("left_thigh")` / `stop_wave()` |
-| 📊 `get_status` | Query all device and channel status | `get_status()` |
+| 📊 `get_status` | Query all device and channel status (JSON) | `get_status()` |
+
+The `devices://status` **resource** provides a human-readable live snapshot of all connected devices, their current state, and activity timers — read it before issuing commands.
+
+## 📳 Lovense Vibration Toys
+
+Supported devices are identified by BLE name prefixes `LVS-` or `LOVE-`, covering models such as:
+Domi, Hush 2, Lush 3, Ferri, Nora, Max 2, and other Lovense Gen 1/2 toys.
+
+- Only the **primary vibration motor** is controlled via `vibrate(alias, strength)`.
+- `strength=0` cleanly stops vibration.
+- Gen 2 devices use Nordic UART; Gen 1 devices use the legacy FFF0 UUID set — detection is automatic.
 
 ## 🌊 Preset Waveforms
 
@@ -168,13 +189,20 @@ design_wave("left_thigh", steps=[
 
 > 💡 Multiple aliases can play different waveforms simultaneously and independently
 
+## ⏱️ Session Timer
+
+Every `play_wave`, `design_wave`, or `vibrate` call records activity timestamps. These appear in `get_status()` and the `devices://status` resource:
+
+- `session.running_since` — when the first activity occurred (resets on `disconnect`)
+- per-alias `last_activity` — time since the alias last received a command
+
 ## ⚠️ Safety Notice
 
 > 🚨 **Important! Please read carefully!**
 
 1. ⚡ **Start at low intensity** — For first use, set strength to `5–10%` and increase gradually
 2. 🔒 **Set a soft limit** — Use `set_strength_limit` to cap the maximum strength and prevent accidents
-3. 🚫 **Emergency stop** — Turn off the Coyote power directly to immediately stop all output
+3. 🚫 **Emergency stop** — Turn off the device power directly to immediately stop all output
 4. 💓 **Restricted areas** — Do not place electrodes near the heart, neck, or head
 5. 🤖 **AI is not human** — AI cannot perceive your actual experience; adjust or stop manually at any time
 
@@ -187,16 +215,18 @@ DG-MCP/
 │   ├── 📡 protocol.py         # BLE protocol constants and packet builders (V2 & V3)
 │   ├── 🌊 waves.py            # Preset waveforms + custom waveforms
 │   ├── 🦷 device.py           # BLE device management (CoyoteDevice + DeviceManager)
-│   └── 🤖 server.py           # MCP Server (10 Tools)
+│   ├── 📳 lovense.py          # Lovense BLE device class
+│   └── 🤖 server.py           # MCP Server (11 Tools + devices://status resource)
 ```
 
 ## 🔧 Technical Details
 
-- **Multi-Device**: Multiple Coyote devices (V2 and V3) can be connected simultaneously
-- **Auto-Detection**: Device type (V2 vs V3) is detected automatically from the BLE device name
+- **Multi-Device**: Multiple Coyote (V2/V3) and Lovense devices can be connected simultaneously
+- **Auto-Detection**: Device type is detected automatically from the BLE device name
 - **BLE Library**: [bleak](https://github.com/hbldh/bleak) — cross-platform BLE
 - **MCP SDK**: [mcp](https://modelcontextprotocol.io/) — Model Context Protocol
-- **Write Loop**: Control packets sent every 100ms per device
+- **Write Loop**: Coyote control packets sent every 100ms per device
+- **Time Formatting**: [humanize](https://python-humanize.readthedocs.io/) for human-readable activity timestamps
 
 ## 🖥️ Platform Support
 

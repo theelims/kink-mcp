@@ -1,11 +1,14 @@
-"""BLE device manager for DG-Lab Coyote (V2 and V3)."""
+"""BLE device manager for DG-Lab Coyote (V2 and V3) and Lovense vibration toys."""
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 
+import humanize
 from bleak import BleakClient, BleakScanner
 
+from .lovense import LovenseDevice, is_lovense_name, LOVENSE_NAME_PREFIXES
 from .protocol import (
     BATTERY_UUID,
     DEVICE_NAME_PREFIX,
@@ -518,16 +521,18 @@ class CoyoteDevice:
 
 
 class DeviceManager:
-    """Manages multiple concurrent Coyote device connections via aliases."""
+    """Manages multiple concurrent device connections (Coyote and Lovense) via aliases."""
 
     def __init__(self) -> None:
-        self._devices: list[CoyoteDevice] = []
-        self._alias_map: dict[str, list[tuple[CoyoteDevice, str]]] = {}
+        self._devices: list[CoyoteDevice | LovenseDevice] = []
+        self._alias_map: dict[str, list[tuple[CoyoteDevice | LovenseDevice, str]]] = {}
+        self._session_start: datetime | None = None
+        self._alias_last_activity: dict[str, datetime] = {}
 
     async def scan(self, timeout: float = 5.0) -> list[dict]:
-        """Scan for nearby Coyote devices (V2 and V3).
+        """Scan for nearby Coyote (V2/V3) and Lovense devices.
 
-        Returns list of {name, address, version} dicts.
+        Returns list of dicts with name, address, and version/type.
         """
         devices = await BleakScanner.discover(timeout=timeout)
         results = []
@@ -537,27 +542,43 @@ class DeviceManager:
                 results.append({"name": name, "address": d.address, "version": "v3"})
             elif name == V2_DEVICE_NAME:
                 results.append({"name": name, "address": d.address, "version": "v2"})
+            elif is_lovense_name(name):
+                results.append({"name": name, "address": d.address, "type": "lovense"})
         return results
 
-    async def connect(self, address: str, alias_a: str, alias_b: str) -> tuple[str, str]:
-        """Connect to a Coyote device, auto-detecting V2 or V3, and assign channel aliases.
+    async def connect(
+        self, address: str, alias_a: str, alias_b: str | None = None
+    ) -> tuple[str, str | None]:
+        """Connect to a Coyote or Lovense device and assign channel alias(es).
 
         Args:
             address: BLE address from scan results.
-            alias_a: Alias for channel A (e.g. "left_thigh", "butt").
-            alias_b: Alias for channel B (e.g. "right_thigh", "chest").
+            alias_a: Alias for channel A (Coyote) or the single vibration channel (Lovense).
+            alias_b: Alias for channel B — required for Coyote, ignored for Lovense.
 
         Returns:
-            (alias_a, alias_b) on success.
+            (alias_a, alias_b) — alias_b is None for Lovense devices.
         """
-        if not alias_a or not alias_b:
-            raise ValueError("Both alias_a and alias_b must be non-empty strings.")
+        if not alias_a:
+            raise ValueError("alias_a must be a non-empty string.")
 
         ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
         if ble_device is None:
             raise ValueError(f"Device {address} not found. Make sure it is powered on.")
 
         name = ble_device.name or ""
+
+        if is_lovense_name(name):
+            dev = LovenseDevice()
+            await dev.connect(address, name=name)
+            self._devices.append(dev)
+            self._alias_map.setdefault(alias_a, []).append((dev, "V"))
+            logger.info("Registered Lovense alias '%s' for %s", alias_a, address)
+            return alias_a, None
+
+        # Coyote path
+        if not alias_b:
+            raise ValueError("alias_b is required for Coyote devices (two channels).")
         if name.startswith(DEVICE_NAME_PREFIX):
             version = "v3"
         elif name == V2_DEVICE_NAME:
@@ -565,7 +586,7 @@ class DeviceManager:
         else:
             raise ValueError(
                 f"Unrecognised device name '{name}' at {address}. "
-                "Expected a DG-Lab Coyote device."
+                "Expected a DG-Lab Coyote or Lovense device."
             )
 
         dev = CoyoteDevice()
@@ -586,8 +607,10 @@ class DeviceManager:
         )
         self._devices.clear()
         self._alias_map.clear()
+        self._session_start = None
+        self._alias_last_activity.clear()
 
-    def _resolve(self, alias: str) -> list[tuple[CoyoteDevice, str]]:
+    def _resolve(self, alias: str) -> list[tuple[CoyoteDevice | LovenseDevice, str]]:
         """Resolve an alias to a list of (device, channel) pairs.
 
         Raises ValueError if the alias is unknown or all matching devices are disconnected.
@@ -599,71 +622,128 @@ class DeviceManager:
                 f"Unknown alias '{alias}'. "
                 f"Connected aliases: {known if known else 'none'}"
             )
-        active = [(dev, ch) for dev, ch in entries if dev.state.connected]
+        active = [
+            (dev, ch) for dev, ch in entries
+            if (dev.state.connected if isinstance(dev, (CoyoteDevice, LovenseDevice)) else False)
+        ]
         if not active:
             raise ValueError(f"Alias '{alias}' exists but all its devices are disconnected.")
         return active
 
+    def _update_activity(self, alias: str) -> None:
+        now = datetime.now()
+        if self._session_start is None:
+            self._session_start = now
+        self._alias_last_activity[alias] = now
+
     def set_strength(self, alias: str, pct: int) -> None:
-        """Set absolute strength for all channels with this alias (0–100%)."""
+        """Set absolute strength for all Coyote channels with this alias (0–100%)."""
+        entries = self._resolve(alias)
+        coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
+        if not coyote_pairs:
+            raise ValueError(f"Alias '{alias}' has no connected Coyote device. Use vibrate() for Lovense.")
         raw = _pct_to_raw(pct)
-        for dev, ch in self._resolve(alias):
+        for dev, ch in coyote_pairs:
             dev.set_strength(ch, raw)
 
     def adjust_strength(self, alias: str, delta_pct: int) -> None:
-        """Increase or decrease strength for all channels with this alias (delta in %)."""
-        raw_delta = delta_pct * 2  # scale percent delta to 0–200 range
-        for dev, ch in self._resolve(alias):
+        """Increase or decrease strength for all Coyote channels with this alias (delta in %)."""
+        entries = self._resolve(alias)
+        coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
+        if not coyote_pairs:
+            raise ValueError(f"Alias '{alias}' has no connected Coyote device. Use vibrate() for Lovense.")
+        raw_delta = delta_pct * 2
+        for dev, ch in coyote_pairs:
             dev.add_strength(ch, raw_delta)
 
     async def set_strength_limit(self, alias: str, limit_pct: int) -> None:
-        """Set strength soft limit for all channels with this alias (0–100%)."""
+        """Set strength soft limit for all Coyote channels with this alias (0–100%)."""
+        entries = self._resolve(alias)
+        coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
+        if not coyote_pairs:
+            raise ValueError(f"Alias '{alias}' has no connected Coyote device.")
         raw = _pct_to_raw(limit_pct)
-        for dev, ch in self._resolve(alias):
+        for dev, ch in coyote_pairs:
             if ch == "A":
                 await dev.set_strength_limit(raw, dev.state.limit_b)
             else:
                 await dev.set_strength_limit(dev.state.limit_a, raw)
 
     def send_wave(self, alias: str, frames: list[WaveFrame], loop: int = 0) -> None:
-        """Send waveform frames to all channels with this alias."""
-        for dev, ch in self._resolve(alias):
+        """Send waveform frames to all Coyote channels with this alias."""
+        entries = self._resolve(alias)
+        coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
+        if not coyote_pairs:
+            raise ValueError(f"Alias '{alias}' has no connected Coyote device. Use vibrate() for Lovense.")
+        for dev, ch in coyote_pairs:
             dev.send_wave(ch, frames, loop=loop)
+        self._update_activity(alias)
 
     def stop_wave(self, alias: str | None = None) -> None:
-        """Stop waveform on channels matching alias, or all channels if alias is None."""
+        """Stop waveform on Coyote channels matching alias, or all channels if alias is None."""
         if alias is None:
             for dev in self._devices:
-                dev.stop_wave(None)
+                if isinstance(dev, CoyoteDevice):
+                    dev.stop_wave(None)
         else:
-            for dev, ch in self._resolve(alias):
+            entries = self._resolve(alias)
+            coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
+            if not coyote_pairs:
+                raise ValueError(f"Alias '{alias}' has no connected Coyote device.")
+            for dev, ch in coyote_pairs:
                 dev.stop_wave(ch)
+
+    async def vibrate(self, alias: str, pct: int) -> None:
+        """Set vibration strength on all Lovense devices with this alias (0–100%)."""
+        entries = self._resolve(alias)
+        lovense_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, LovenseDevice)]
+        if not lovense_pairs:
+            raise ValueError(f"Alias '{alias}' has no connected Lovense device.")
+        for dev, _ in lovense_pairs:
+            await dev.set_vibration(pct)
+        self._update_activity(alias)
 
     def get_all_status(self) -> dict:
         """Return alias-keyed status for all connected channels."""
         aliases: dict[str, list[dict]] = {}
         for alias, entries in self._alias_map.items():
+            last_act = self._alias_last_activity.get(alias)
+            last_activity = humanize.naturaltime(last_act) if last_act else None
             channel_statuses = []
             for dev, ch in entries:
-                s = dev.state
-                if ch == "A":
-                    strength_raw = s.strength_a
-                    limit_raw = s.limit_a
-                    wave_active = len(s.wave_a) > 0
+                if isinstance(dev, LovenseDevice):
+                    channel_statuses.append({
+                        "device_type": "lovense",
+                        "strength_pct": dev.state.strength,
+                        "battery": dev.state.battery,
+                        "connected": dev.state.connected,
+                        "last_activity": last_activity,
+                    })
                 else:
-                    strength_raw = s.strength_b
-                    limit_raw = s.limit_b
-                    wave_active = len(s.wave_b) > 0
-                channel_statuses.append({
-                    "strength_pct": _raw_to_pct(strength_raw),
-                    "limit_pct": _raw_to_pct(limit_raw),
-                    "wave_active": wave_active,
-                    "battery": s.battery,
-                    "connected": s.connected,
-                })
+                    s = dev.state
+                    if ch == "A":
+                        strength_raw = s.strength_a
+                        limit_raw = s.limit_a
+                        wave_active = len(s.wave_a) > 0
+                    else:
+                        strength_raw = s.strength_b
+                        limit_raw = s.limit_b
+                        wave_active = len(s.wave_b) > 0
+                    channel_statuses.append({
+                        "device_type": "coyote",
+                        "strength_pct": _raw_to_pct(strength_raw),
+                        "limit_pct": _raw_to_pct(limit_raw),
+                        "wave_active": wave_active,
+                        "battery": s.battery,
+                        "connected": s.connected,
+                        "last_activity": last_activity,
+                    })
             aliases[alias] = channel_statuses
 
         return {
             "connected_devices": sum(1 for d in self._devices if d.state.connected),
             "aliases": aliases,
+            "session": {
+                "running_since": humanize.naturaltime(self._session_start) if self._session_start else None,
+            },
         }
