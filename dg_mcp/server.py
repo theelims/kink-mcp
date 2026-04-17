@@ -1,12 +1,12 @@
-"""MCP Server for DG-Lab Coyote 3.0."""
+"""MCP Server for DG-Lab Coyote devices."""
 
 import json
 import logging
 
 from mcp.server.fastmcp import FastMCP
 
-from .device import CoyoteDevice
-from .waves import PRESETS, custom_wave_to_frames, preset_to_frames, steps_to_frames
+from .device import DeviceManager
+from .waves import PRESETS, preset_to_frames, steps_to_frames
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,175 +14,202 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "DG-Lab Coyote",
     instructions=(
-        "Control a DG-Lab Coyote pulse device (V2 or V3) via Bluetooth. "
-        "Typical workflow: scan → connect (pass the version from scan results) → set_strength → send_wave. "
-        "Strength range is 0~200. Always start low (e.g. 5~10) and increase gradually. "
-        "Available wave presets: breath, tide, pulse_low, pulse_mid, pulse_high, tap."
+        "Control one or more DG-Lab Coyote pulse devices via Bluetooth. "
+        "Each device has two channels identified by user-defined aliases (e.g. 'left_thigh', 'butt'). "
+        "Aliases are assigned when you connect; multiple channels can share an alias and will be "
+        "controlled in sync. "
+        "Typical workflow: scan → connect (provide aliases) → set_strength → play_wave or design_wave. "
+        "Strength range is 0–100%. Always start low (5–10%) and increase gradually. "
+        "Available wave presets: breath, tide, pulse_low, pulse_mid, pulse_high, tap. "
+        "loop=0 means infinite loop; loop=N plays the wave N times then stops."
     ),
 )
 
-device = CoyoteDevice()
+manager = DeviceManager()
 
 
 @mcp.tool()
 async def scan(timeout: float = 5.0) -> str:
-    """Scan for nearby DG-Lab Coyote devices (V2 and V3).
+    """Scan for nearby DG-Lab Coyote devices.
 
     Args:
         timeout: Scan duration in seconds (default 5)
 
     Returns:
-        JSON list of found devices with name, address, and version.
+        JSON list of found devices with name and address.
     """
-    results = await device.scan(timeout=timeout)
+    results = await manager.scan(timeout=timeout)
     if not results:
         return "No Coyote devices found. Make sure the device is powered on."
     return json.dumps(results, ensure_ascii=False)
 
 
 @mcp.tool()
-async def connect(address: str, version: str = "v3") -> str:
-    """Connect to a Coyote device by Bluetooth address.
+async def connect(address: str, alias_a: str, alias_b: str) -> str:
+    """Connect to a Coyote device by Bluetooth address and assign aliases to its two channels.
+
+    The device type is detected automatically. Aliases are free-form labels describing
+    the electrode placement (e.g. 'left_thigh', 'butt', 'chest'). Multiple channels
+    may share the same alias — they will be controlled in sync.
 
     Args:
         address: BLE address from scan results (e.g. "AA:BB:CC:DD:EE:FF")
-        version: Device version from scan results — "v2" or "v3" (default "v3")
+        alias_a: Label for channel A (e.g. "left_thigh")
+        alias_b: Label for channel B (e.g. "right_thigh")
     """
     try:
-        await device.connect(address, version=version)
-        return f"Connected to {address} (V{version[-1]}). Battery: {device.state.battery}%"
+        a, b = await manager.connect(address, alias_a=alias_a, alias_b=alias_b)
+        # Find the device we just connected (last in list)
+        dev = manager._devices[-1]
+        battery = dev.state.battery
+        battery_str = f"{battery}%" if battery >= 0 else "unknown"
+        return (
+            f"Connected to {address}. Battery: {battery_str}. "
+            f"Channel A → '{a}', Channel B → '{b}'."
+        )
     except Exception as e:
         return f"Connection failed: {e}"
 
 
 @mcp.tool()
 async def disconnect() -> str:
-    """Disconnect from the current device."""
-    await device.disconnect()
-    return "Disconnected."
+    """Disconnect from ALL connected devices and clear all aliases."""
+    await manager.disconnect_all()
+    return "All devices disconnected."
 
 
 @mcp.tool()
-async def set_strength(channel: str, value: int) -> str:
-    """Set the absolute strength of a channel.
+async def set_strength(alias: str, value: int) -> str:
+    """Set the absolute strength of a channel or group of synced channels.
 
-    SAFETY: Start with low values (5~10) and increase gradually.
+    SAFETY: Start with low values (5–10%) and increase gradually.
 
     Args:
-        channel: "A" or "B"
-        value: Strength value (0~200)
+        alias: Channel alias assigned at connect time (e.g. "left_thigh")
+        value: Strength percentage (0–100)
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
-    if value < 0 or value > 200:
-        return "Error: Strength must be 0~200."
-    ch = channel.upper()
-    device.set_strength(ch, value)
-    msg = f"Channel {ch} strength set to {value}."
-    wave_active = device.state.wave_a if ch == "A" else device.state.wave_b
+    if value < 0 or value > 100:
+        return "Error: Strength must be 0–100."
+    try:
+        manager.set_strength(alias, value)
+    except ValueError as e:
+        return f"Error: {e}"
+    entries = manager._alias_map.get(alias, [])
+    wave_active = any(
+        (dev.state.wave_a if ch == "A" else dev.state.wave_b)
+        for dev, ch in entries
+        if dev.state.connected
+    )
+    msg = f"'{alias}' strength set to {value}%."
     if not wave_active:
-        msg += " Note: no active waveform on this channel — consider sending a wave for output."
+        msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
 
 
 @mcp.tool()
-async def add_strength(channel: str, delta: int) -> str:
-    """Increase or decrease the strength of a channel.
+async def adjust_strength(alias: str, delta: int) -> str:
+    """Increase or decrease the strength of a channel or group of synced channels.
 
     Args:
-        channel: "A" or "B"
-        delta: Amount to change (positive = increase, negative = decrease)
+        alias: Channel alias assigned at connect time
+        delta: Percentage to change (positive = increase, negative = decrease)
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
-    ch = channel.upper()
-    device.add_strength(ch, delta)
+    try:
+        manager.adjust_strength(alias, delta)
+    except ValueError as e:
+        return f"Error: {e}"
     direction = "increased" if delta > 0 else "decreased"
-    msg = f"Channel {ch} strength {direction} by {abs(delta)}."
-    wave_active = device.state.wave_a if ch == "A" else device.state.wave_b
+    entries = manager._alias_map.get(alias, [])
+    wave_active = any(
+        (dev.state.wave_a if ch == "A" else dev.state.wave_b)
+        for dev, ch in entries
+        if dev.state.connected
+    )
+    msg = f"'{alias}' strength {direction} by {abs(delta)}%."
     if not wave_active:
-        msg += " Note: no active waveform on this channel — consider sending a wave for output."
+        msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
 
 
 @mcp.tool()
-async def set_strength_limit(limit_a: int, limit_b: int) -> str:
-    """Set strength soft limits for safety.
+async def set_strength_limit(alias: str, limit: int) -> str:
+    """Set the strength soft limit for a channel or group of synced channels.
 
-    V3: persisted on device even after power off.
-    V2: software-enforced cap (not stored on device).
+    Prevents the strength from exceeding this value. Setting a limit before
+    starting output is recommended for safety.
 
     Args:
-        limit_a: Max strength for A channel (0~200)
-        limit_b: Max strength for B channel (0~200)
+        alias: Channel alias assigned at connect time
+        limit: Maximum strength percentage (0–100)
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
-    await device.set_strength_limit(limit_a, limit_b)
-    return f"Strength limits set: A={limit_a}, B={limit_b}."
+    if limit < 0 or limit > 100:
+        return "Error: Limit must be 0–100."
+    try:
+        await manager.set_strength_limit(alias, limit)
+    except ValueError as e:
+        return f"Error: {e}"
+    return f"'{alias}' strength limit set to {limit}%."
 
 
 @mcp.tool()
-async def send_wave(
-    channel: str,
-    preset: str | None = None,
-    frequency: int | None = None,
-    intensity: int | None = None,
-    duration_frames: int = 10,
-    loop: bool = True,
+async def play_wave(
+    alias: str,
+    preset: str,
+    loop: int = 0,
+    strength: int | None = None,
 ) -> str:
-    """Send a waveform to a channel.
-
-    Either use a preset name OR specify custom frequency/intensity.
+    """Play a preset waveform on a channel or group of synced channels.
 
     Args:
-        channel: "A" or "B"
-        preset: Preset name (breath, tide, pulse_low, pulse_mid, pulse_high, tap). Mutually exclusive with frequency/intensity.
-        frequency: Custom wave frequency in ms (10~1000). Used with intensity.
-        intensity: Custom wave intensity (0~100). Used with frequency.
-        duration_frames: Number of 100ms frames for custom wave (default 10 = 1 second)
-        loop: Whether to loop the waveform (default true)
+        alias: Channel alias assigned at connect time
+        preset: Preset name — breath, tide, pulse_low, pulse_mid, pulse_high, tap
+        loop: 0 = loop infinitely (default); N = play exactly N times then stop
+        strength: Optional strength percentage (0–100) to set before playing.
+                  If omitted, current strength is kept.
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
-
-    if preset:
+    if strength is not None:
+        if strength < 0 or strength > 100:
+            return "Error: Strength must be 0–100."
         try:
-            frames = preset_to_frames(preset)
+            manager.set_strength(alias, strength)
         except ValueError as e:
-            return str(e)
-    elif frequency is not None and intensity is not None:
-        frames = custom_wave_to_frames(
-            freq=frequency,
-            intensity=min(max(intensity, 0), 100),
-            count=duration_frames,
-        )
-    else:
-        return "Error: Provide either 'preset' or both 'frequency' and 'intensity'."
+            return f"Error: {e}"
 
-    device.send_wave(channel.upper(), frames, loop=loop)
-    source = preset if preset else f"custom(freq={frequency}, int={intensity})"
-    return f"Wave '{source}' started on channel {channel.upper()}, loop={loop}."
+    try:
+        frames = preset_to_frames(preset)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        manager.send_wave(alias, frames, loop=loop)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    loop_desc = "looping" if loop == 0 else f"{loop}x"
+    strength_desc = f", strength={strength}%" if strength is not None else ""
+    return f"Preset '{preset}' playing on '{alias}' ({loop_desc}{strength_desc})."
 
 
 @mcp.tool()
 async def design_wave(
-    channel: str,
+    alias: str,
     steps: list[dict],
-    loop: bool = True,
+    loop: int = 0,
+    strength: int | None = None,
 ) -> str:
     """Design and play a custom waveform by defining a sequence of steps.
 
-    This allows AI to create any waveform pattern: ramps, pulses, rhythms, etc.
-    Each step represents 100ms of output.
+    Creates any pattern: ramps, pulses, rhythms, etc. Each step is 100ms of output.
 
     Args:
-        channel: "A" or "B"
+        alias: Channel alias assigned at connect time
         steps: List of step objects, each with:
-            - freq: wave frequency in ms (10~1000, lower = higher frequency pulse)
-            - intensity: wave intensity (0~100, 0=silent, 100=strongest)
+            - freq: wave frequency in ms (10–1000, lower = higher frequency pulse)
+            - intensity: wave intensity (0–100, 0=silent, 100=strongest)
             - repeat: optional, repeat this step N times (default 1)
-        loop: Whether to loop the waveform (default true)
+        loop: 0 = loop infinitely (default); N = play exactly N times then stop
+        strength: Optional strength percentage (0–100) to set before playing.
+                  If omitted, current strength is kept.
 
     Example steps for a gradual ramp up then sudden drop:
         [
@@ -194,36 +221,53 @@ async def design_wave(
             {"freq": 10, "intensity": 0, "repeat": 2}
         ]
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
+    if strength is not None:
+        if strength < 0 or strength > 100:
+            return "Error: Strength must be 0–100."
+        try:
+            manager.set_strength(alias, strength)
+        except ValueError as e:
+            return f"Error: {e}"
+
     if not steps:
         return "Error: steps list cannot be empty."
     try:
         frames = steps_to_frames(steps)
     except (KeyError, TypeError) as e:
         return f"Error: Invalid step format: {e}. Each step needs 'freq' and 'intensity'."
-    device.send_wave(channel.upper(), frames, loop=loop)
-    return f"Custom wave ({len(frames)} frames, {len(frames)*100}ms) started on channel {channel.upper()}, loop={loop}."
+
+    try:
+        manager.send_wave(alias, frames, loop=loop)
+    except ValueError as e:
+        return f"Error: {e}"
+
+    loop_desc = "looping" if loop == 0 else f"{loop}x"
+    strength_desc = f", strength={strength}%" if strength is not None else ""
+    return (
+        f"Custom wave ({len(frames)} frames, {len(frames) * 100}ms) "
+        f"playing on '{alias}' ({loop_desc}{strength_desc})."
+    )
 
 
 @mcp.tool()
-async def stop_wave(channel: str | None = None) -> str:
+async def stop_wave(alias: str | None = None) -> str:
     """Stop waveform output.
 
     Args:
-        channel: "A", "B", or omit to stop both channels
+        alias: Channel alias to stop, or omit to stop all channels on all devices.
     """
-    if not device.state.connected:
-        return "Error: Not connected to any device."
-    device.stop_wave(channel.upper() if channel else None)
-    target = channel.upper() if channel else "both channels"
+    try:
+        manager.stop_wave(alias)
+    except ValueError as e:
+        return f"Error: {e}"
+    target = f"'{alias}'" if alias is not None else "all channels"
     return f"Wave stopped on {target}."
 
 
 @mcp.tool()
 async def get_status() -> str:
-    """Get current device status including connection, strength, battery, and wave state."""
-    status = device.get_status()
+    """Get current status of all connected devices, grouped by alias."""
+    status = manager.get_all_status()
     return json.dumps(status, ensure_ascii=False)
 
 
