@@ -1,77 +1,84 @@
-"""Preset waveform data for DG-Lab Coyote 3.0 (V3 format).
+"""Waveform library for DG-Lab Coyote 3.0 (V3 format).
 
-Each preset is a list of (freq, intensity) tuples.
-Each tuple represents 100ms of output (4 identical sub-frames of 25ms).
-The waveforms loop continuously when played.
+Wave definitions are stored in a JSON file at ~/.local/share/dg-mcp/waves.json.
+On first run the file is created with the built-in presets.
 """
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
-# Presets from the official SDK example.md
+WAVES_FILE = Path.home() / ".local" / "share" / "dg-mcp" / "waves.json"
 
-BREATH: list[tuple[int, int]] = [
-    (10, 0),
-    (10, 20),
-    (10, 40),
-    (10, 60),
-    (10, 80),
-    (10, 100),
-    (10, 100),
-    (10, 100),
-    (10, 0),
-    (10, 0),
-    (10, 0),
-    (10, 0),
-]
-
-TIDE: list[tuple[int, int]] = [
-    (10, 0),
-    (11, 16),
-    (13, 33),
-    (14, 50),
-    (16, 66),
-    (18, 83),
-    (19, 100),
-    (21, 92),
-    (22, 84),
-    (24, 76),
-    (26, 68),
-    (26, 0),
-    (27, 16),
-    (29, 33),
-    (30, 50),
-    (32, 66),
-    (34, 83),
-    (35, 100),
-    (37, 92),
-    (38, 84),
-    (40, 76),
-    (42, 68),
-    (10, 0),
-]
-
-# Continuous steady pulse at various intensities
-PULSE_LOW: list[tuple[int, int]] = [(10, 30)] * 10
-PULSE_MID: list[tuple[int, int]] = [(10, 60)] * 10
-PULSE_HIGH: list[tuple[int, int]] = [(10, 100)] * 10
-
-# Quick tap pattern
-TAP: list[tuple[int, int]] = [
-    (10, 100),
-    (10, 0),
-    (10, 0),
-    (10, 100),
-    (10, 0),
-    (10, 0),
-]
-
-PRESETS: dict[str, list[tuple[int, int]]] = {
-    "breath": BREATH,
-    "tide": TIDE,
-    "pulse_low": PULSE_LOW,
-    "pulse_mid": PULSE_MID,
-    "pulse_high": PULSE_HIGH,
-    "tap": TAP,
+_DEFAULTS: dict = {
+    "breath": {
+        "description": "Slow rhythmic rise and fall, mimicking a breathing pattern",
+        "steps": [
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 20},
+            {"freq": 10, "intensity": 40},
+            {"freq": 10, "intensity": 60},
+            {"freq": 10, "intensity": 80},
+            {"freq": 10, "intensity": 100},
+            {"freq": 10, "intensity": 100},
+            {"freq": 10, "intensity": 100},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 0},
+        ],
+    },
+    "tide": {
+        "description": "Gradual wave that builds and ebbs twice with rising frequency, like ocean tides",
+        "steps": [
+            {"freq": 10, "intensity": 0},
+            {"freq": 11, "intensity": 16},
+            {"freq": 13, "intensity": 33},
+            {"freq": 14, "intensity": 50},
+            {"freq": 16, "intensity": 66},
+            {"freq": 18, "intensity": 83},
+            {"freq": 19, "intensity": 100},
+            {"freq": 21, "intensity": 92},
+            {"freq": 22, "intensity": 84},
+            {"freq": 24, "intensity": 76},
+            {"freq": 26, "intensity": 68},
+            {"freq": 26, "intensity": 0},
+            {"freq": 27, "intensity": 16},
+            {"freq": 29, "intensity": 33},
+            {"freq": 30, "intensity": 50},
+            {"freq": 32, "intensity": 66},
+            {"freq": 34, "intensity": 83},
+            {"freq": 35, "intensity": 100},
+            {"freq": 37, "intensity": 92},
+            {"freq": 38, "intensity": 84},
+            {"freq": 40, "intensity": 76},
+            {"freq": 42, "intensity": 68},
+            {"freq": 10, "intensity": 0},
+        ],
+    },
+    "pulse_low": {
+        "description": "Steady gentle continuous pulse",
+        "steps": [{"freq": 10, "intensity": 30, "repeat": 10}],
+    },
+    "pulse_mid": {
+        "description": "Steady moderate continuous pulse",
+        "steps": [{"freq": 10, "intensity": 60, "repeat": 10}],
+    },
+    "pulse_high": {
+        "description": "Steady intense continuous pulse",
+        "steps": [{"freq": 10, "intensity": 100, "repeat": 10}],
+    },
+    "tap": {
+        "description": "Sharp double-tap with pauses — rhythmic intermittent pulses",
+        "steps": [
+            {"freq": 10, "intensity": 100},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 100},
+            {"freq": 10, "intensity": 0},
+            {"freq": 10, "intensity": 0},
+        ],
+    },
 }
 
 
@@ -82,18 +89,46 @@ class WaveFrame:
     intensity: tuple[int, int, int, int]
 
 
-def preset_to_frames(name: str) -> list[WaveFrame]:
-    """Convert a preset name to a list of WaveFrames."""
-    data = PRESETS.get(name)
-    if data is None:
-        raise ValueError(f"Unknown preset: {name}. Available: {list(PRESETS.keys())}")
-    return [
-        WaveFrame(
-            freq=(f, f, f, f),
-            intensity=(i, i, i, i),
-        )
-        for f, i in data
-    ]
+def load_waves() -> dict:
+    """Load wave library from JSON, creating it with defaults if missing."""
+    if not WAVES_FILE.exists():
+        WAVES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WAVES_FILE.write_text(json.dumps(_DEFAULTS, indent=2))
+        return dict(_DEFAULTS)
+    return json.loads(WAVES_FILE.read_text())
+
+
+def save_wave(name: str, steps: list[dict], description: str) -> None:
+    """Add or overwrite a wave entry in the JSON library."""
+    waves = load_waves()
+    waves[name] = {"description": description, "steps": steps}
+    WAVES_FILE.write_text(json.dumps(waves, indent=2))
+
+
+def get_frames(name: str) -> list[WaveFrame]:
+    """Return WaveFrames for a named wave from the library."""
+    waves = load_waves()
+    if name not in waves:
+        raise ValueError(f"Unknown wave: '{name}'. Available: {list(waves.keys())}")
+    return steps_to_frames(waves[name]["steps"])
+
+
+def steps_to_frames(steps: list[dict]) -> list[WaveFrame]:
+    """Convert a list of step dicts to WaveFrames.
+
+    Each step is a dict with:
+        - freq: wave period in ms (10~1000). V3 encoding happens at write time.
+        - intensity: wave intensity (0~100)
+        - repeat: optional, repeat this step N times (default 1)
+    """
+    frames = []
+    for step in steps:
+        f = max(10, min(1000, step["freq"]))
+        i = max(0, min(100, step.get("intensity", 0)))
+        repeat = max(1, step.get("repeat", 1))
+        frame = WaveFrame(freq=(f, f, f, f), intensity=(i, i, i, i))
+        frames.extend([frame] * repeat)
+    return frames
 
 
 def custom_wave_to_frames(
@@ -114,28 +149,3 @@ def custom_wave_to_frames(
             intensity=(intensity, intensity, intensity, intensity),
         )
     ] * count
-
-
-def steps_to_frames(steps: list[dict]) -> list[WaveFrame]:
-    """Convert a list of step dicts to WaveFrames.
-
-    Each step is a dict with:
-        - freq: wave period in ms (10~1000). V3 encoding happens at write time.
-        - intensity: wave intensity (0~100)
-        - repeat: optional, repeat this step N times (default 1)
-
-    Example:
-        [
-            {"freq": 10, "intensity": 0},
-            {"freq": 10, "intensity": 50, "repeat": 3},
-            {"freq": 20, "intensity": 100},
-        ]
-    """
-    frames = []
-    for step in steps:
-        f = max(10, min(1000, step["freq"]))
-        i = max(0, min(100, step.get("intensity", 0)))
-        repeat = max(1, step.get("repeat", 1))
-        frame = WaveFrame(freq=(f, f, f, f), intensity=(i, i, i, i))
-        frames.extend([frame] * repeat)
-    return frames

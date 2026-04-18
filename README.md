@@ -11,8 +11,10 @@
 - 🔌 **Multi-Device** — Connect multiple devices at once; each channel gets a descriptive alias
 - 🏷️ **Alias System** — Channels are identified by labels you choose (e.g. `"left_thigh"`, `"toy"`); shared aliases sync multiple channels automatically
 - 🎛️ **11 Tools** — Scan, connect, strength control, waveform playback, custom waveform design, vibration, status query
-- 🌊 **6 Preset Waveforms** — Breath, tide, low/mid/high pulse, tap
+- 🌊 **Wave Library** — 6 built-in presets; design and save unlimited custom waves via `design_wave`
+- 📚 **3 Resources** — Live device status, wave library listing, wave design guide
 - 🔒 **Pain Endurance Limit** — Configurable ceiling to prevent AI from exceeding user-defined intensity
+
 - ⏱️ **Session Timer** — Track session start time and per-alias last-activity timestamps
 
 ## 📦 Installation
@@ -66,11 +68,12 @@ claude mcp add dg-lab -- uvx dg-mcp
 
 **Coyote flow:**
 ```
-🔍 scan()                                      → Scan for nearby devices
-🔗 connect(address, alias_a, alias_b)          → Connect and name the channels
-⚡ set_strength(alias, value)                  → Set channel strength (0–100%)
-🌊 play_wave(alias, preset)                    → Play a preset waveform
-🎨 design_wave(alias, steps)                   → Design a multi-step waveform
+🔍 scan()                                              → Scan for nearby devices
+🔗 connect(address, alias_a, alias_b)                  → Connect and name the channels
+⚡ set_strength(alias, value)                          → Set channel strength (0–100%)
+🌊 play_wave(alias, name)                              → Play any wave from the library
+🎨 design_wave(steps, name, description)               → Save a custom wave to the library
+   └─ then play_wave(alias, name)                      → Play the designed wave
 ```
 
 **Lovense flow:**
@@ -126,12 +129,15 @@ set_strength("outer", 25)  # sets both devices' 'outer' channels simultaneously
 | ➕ `adjust_strength` | Increase or decrease Coyote strength | `adjust_strength("left_thigh", 5)` |
 | 🔒 `set_strength_limit` | Set pain endurance limit 0–100% (Coyote) | `set_strength_limit("left_thigh", 50)` |
 | 📳 `vibrate` | Set Lovense vibration intensity 0–100% | `vibrate("toy", 40)` |
-| 🌊 `play_wave` | Play a preset waveform (Coyote) | `play_wave("left_thigh", preset="breath")` |
-| 🎨 `design_wave` | Design a multi-step waveform (Coyote) | `design_wave("left_thigh", steps=[...])` |
+| 🌊 `play_wave` | Play a wave from the library (Coyote) | `play_wave("left_thigh", preset="breath")` |
+| 🎨 `design_wave` | Save a custom wave to the library | `design_wave(steps=[...], name="ramp", description="...")` |
 | ⏹️ `stop_wave` | Stop waveform (omit alias to stop all) | `stop_wave("left_thigh")` / `stop_wave()` |
 | 📊 `get_status` | Query all device and channel status (JSON) | `get_status()` |
 
-The `devices://status` **resource** provides a human-readable live snapshot of all connected devices, their current state, and activity timers — read it before issuing commands.
+**Resources:**
+- `devices://status` — live human-readable snapshot of all connected devices; read before issuing commands
+- `waves://library` — all available wave names and descriptions; read before calling `play_wave`
+- `waves://guide` — wave parameter reference and sensation guide; read before calling `design_wave`
 
 ## 📳 Lovense Vibration Toys
 
@@ -142,18 +148,23 @@ Domi, Hush 2, Lush 3, Ferri, Nora, Max 2, and other Lovense Gen 1/2 toys.
 - `strength=0` cleanly stops vibration.
 - Gen 2 devices use Nordic UART; Gen 1 devices use the legacy FFF0 UUID set — detection is automatic.
 
-## 🌊 Preset Waveforms
+## 🌊 Wave Library
 
-| Name | Description | Feel |
-|------|-------------|------|
-| 🫁 `breath` | Breath | Slow rise and fall, from nothing to strong and back |
-| 🌊 `tide` | Tide | Gradually changing frequency, wave-like sensation |
-| 💤 `pulse_low` | Low pulse | Gentle and continuous |
-| ⚡ `pulse_mid` | Mid pulse | Moderate and continuous |
-| 🔥 `pulse_high` | High pulse | Intense and continuous |
-| 👆 `tap` | Tap | Rhythmic intermittent pulses |
+Wave definitions are stored in `~/.local/share/dg-mcp/waves.json` and loaded at runtime.
+Read `waves://library` for all available names and descriptions. Use `design_wave` to add your own.
 
-### play_wave — Preset with Loop Control
+Six built-in presets:
+
+| Name | Feel |
+|------|------|
+| 🫁 `breath` | Slow rise and fall, like breathing |
+| 🌊 `tide` | Gradual build and ebb twice, with rising frequency |
+| 💤 `pulse_low` | Steady gentle pulse |
+| ⚡ `pulse_mid` | Steady moderate pulse |
+| 🔥 `pulse_high` | Steady intense pulse |
+| 👆 `tap` | Sharp double-tap with pauses |
+
+### play_wave — Play Any Library Wave
 
 ```
 play_wave("left_thigh", preset="breath")            # loop infinitely (default)
@@ -166,32 +177,39 @@ play_wave("left_thigh", preset="pulse_mid",
 - `loop=N` — play exactly N full cycles then stop automatically
 - `strength` — optional, sets strength (0–100%) before starting; omit to keep current
 
-### 🎼 Design Multi-Step Waveforms
+### 🎼 Design and Save Custom Waveforms
 
-Use `design_wave` to create complex waveforms where frequency and intensity change over time. Each step lasts 100ms:
+Use `design_wave` to save a named wave to the library, then `play_wave` to play it.
+Read `waves://guide` for a full parameter reference and sensation guide.
 
 ```
-design_wave("left_thigh", steps=[
-    {"freq": 10, "intensity": 0},
-    {"freq": 10, "intensity": 25},
-    {"freq": 10, "intensity": 50},
-    {"freq": 10, "intensity": 75},
-    {"freq": 10, "intensity": 100, "repeat": 3},
-    {"freq": 10, "intensity": 0,   "repeat": 2}
-], loop=0, strength=15)
+# Step 1: save to library
+design_wave(
+    steps=[
+        {"freq": 10, "intensity": 0},
+        {"freq": 10, "intensity": 25},
+        {"freq": 10, "intensity": 50},
+        {"freq": 10, "intensity": 75},
+        {"freq": 10, "intensity": 100, "repeat": 3},
+        {"freq": 10, "intensity": 0,   "repeat": 2}
+    ],
+    name="ramp",
+    description="Gradual ramp up then sudden drop"
+)
+
+# Step 2: play it
+play_wave("left_thigh", preset="ramp", loop=0, strength=15)
 ```
 
-- `freq`: Pulse frequency 10–1000ms (lower value = higher frequency)
-- `intensity`: Intensity 0–100 (0 = no output, 100 = maximum)
-- `repeat`: Number of times to repeat this step (default 1)
-- `loop`: 0 = infinite, N = play N times (default 0)
-- `strength`: Optional, sets strength before starting
+- `freq`: Pulse period 10–1000ms (lower = higher frequency = sharper feel)
+- `intensity`: Intensity 0–100 (0 = silent, 100 = maximum per frame)
+- `repeat`: Number of 100ms frames for this step (default 1)
 
 > 💡 Multiple aliases can play different waveforms simultaneously and independently
 
 ## ⏱️ Session Timer
 
-Every `play_wave`, `design_wave`, or `vibrate` call records activity timestamps. These appear in `get_status()` and the `devices://status` resource:
+Every `play_wave` or `vibrate` call records activity timestamps. These appear in `get_status()` and the `devices://status` resource:
 
 - `session.running_since` — when the first activity occurred (resets on `disconnect`)
 - per-alias `last_activity` — time since the alias last received a command
@@ -216,7 +234,7 @@ DG-MCP/
 │   ├── 🌊 waves.py            # Preset waveforms + custom waveforms
 │   ├── 🦷 device.py           # BLE device management (CoyoteDevice + DeviceManager)
 │   ├── 📳 lovense.py          # Lovense BLE device class
-│   └── 🤖 server.py           # MCP Server (11 Tools + devices://status resource)
+│   └── 🤖 server.py           # MCP Server (11 Tools + 3 resources)
 ```
 
 ## 🔧 Technical Details

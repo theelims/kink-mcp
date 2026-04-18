@@ -6,7 +6,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from .device import CoyoteDevice, DeviceManager
-from .waves import PRESETS, preset_to_frames, steps_to_frames
+from .waves import get_frames, load_waves, save_wave, steps_to_frames
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,8 +25,12 @@ mcp = FastMCP(
         "Typical flow: scan → connect(address, alias_a) → vibrate(alias, strength). "
         "\n\n"
         "GENERAL: Strength range 0–100%. Always start low (5–10%) and increase gradually. "
-        "Available Coyote wave presets: breath, tide, pulse_low, pulse_mid, pulse_high, tap. "
         "loop=0 means infinite loop; loop=N plays the wave N times then stops. "
+        "Read the devices://status resource for a live snapshot of all connected devices before issuing commands. "
+        "Read waves://library for all available wave names and descriptions. "
+        "To create a custom wave: design_wave(steps, name, description) saves it to the library, "
+        "then play_wave(alias, name) plays it. "
+        "Read waves://guide for a full explanation of wave parameters and how they feel."
         "Call live_status() for a live snapshot of all connected devices before issuing commands."
     ),
 )
@@ -72,6 +76,70 @@ def live_status() -> str:
                 "",
             ]
     return "\n".join(lines)
+
+
+@mcp.resource("waves://library")
+def wave_library() -> str:
+    """All available waveforms with descriptions. Read before calling play_wave."""
+    waves = load_waves()
+    lines = [f"{name}: {data['description']}" for name, data in waves.items()]
+    return "\n".join(lines)
+
+
+@mcp.resource("waves://guide")
+def wave_guide() -> str:
+    """How to design waveforms: parameter reference and sensation guide."""
+    return """\
+# Waveform Design Guide
+
+## Workflow
+1. design_wave(steps, name, description) — saves a wave to the library
+2. play_wave(alias, name) — plays any library wave on a device channel
+
+## Step parameters
+
+### freq (10–1000 ms)
+The period of each pulse. Controls how "sharp" or "soft" the sensation feels.
+- 10 ms  — very high frequency; feels like a sharp, electric tingle or buzz
+- 20–50 ms — medium frequency; a distinct, firm pulse
+- 100–300 ms — low frequency; slow, deep thumps
+- 500–1000 ms — very low; almost like individual beats, widely spaced
+
+Lower freq = higher frequency pulses = sharper, more intense character.
+Higher freq = slower pulses = softer, more diffuse sensation.
+
+### intensity (0–100)
+How strong the pulse is within each frame.
+- 0    — silent (no output)
+- 1–30 — subtle, barely perceptible
+- 30–60 — moderate, clearly felt
+- 60–90 — strong
+- 100  — maximum intensity for that frame
+
+Note: overall output level is also controlled by set_strength on the channel.
+Intensity here shapes the *pattern*; strength scales the *volume*.
+
+### repeat (default 1)
+How many consecutive 100ms frames this step occupies.
+Use repeat to hold a level steady without listing the same step multiple times.
+
+## Sensation patterns
+
+| Pattern          | Steps sketch                                          | Feel                        |
+|------------------|-------------------------------------------------------|-----------------------------|
+| Ramp up          | intensity 0→100 over many steps                       | Gradual build               |
+| Ramp down        | intensity 100→0                                       | Fade out                    |
+| Pulse burst      | high intensity, repeat=2, then intensity=0, repeat=3  | Sharp hit then silence      |
+| Oscillation      | alternate high/low intensity                          | Rhythmic, wave-like         |
+| Frequency sweep  | freq 10→500 while intensity stays constant            | Character shifts soft→sharp |
+| Hold             | one step with repeat=N                                | Steady, constant output     |
+
+## Tips
+- Start with intensity 0 and ramp up — it feels less abrupt.
+- Short patterns (6–12 steps) loop more noticeably than long ones.
+- Vary freq and intensity together for complex sensations.
+- Use loop=0 for continuous patterns; loop=N for finite bursts.
+"""
 
 
 @mcp.tool()
@@ -229,11 +297,13 @@ async def play_wave(
     loop: int = 0,
     strength: int | None = None,
 ) -> str:
-    """Play a preset waveform on a Coyote channel or group of synced channels.
+    """Play a wave from the library on a Coyote channel or group of synced channels.
+
+    See waves://library for all available wave names and descriptions.
 
     Args:
         alias: Channel alias assigned at connect time
-        preset: Preset name — breath, tide, pulse_low, pulse_mid, pulse_high, tap
+        preset: Wave name from the library (e.g. "breath", "tide", or any designed wave)
         loop: 0 = loop infinitely (default); N = play exactly N times then stop
         strength: Optional strength percentage (0–100) to set before playing.
                   If omitted, current strength is kept.
@@ -251,7 +321,7 @@ async def play_wave(
             strength_desc += f" (limited to {effective}% by pain endurance limit)"
 
     try:
-        frames = preset_to_frames(preset)
+        frames = get_frames(preset)
     except ValueError as e:
         return str(e)
 
@@ -266,24 +336,22 @@ async def play_wave(
 
 @mcp.tool()
 async def design_wave(
-    alias: str,
     steps: list[dict],
-    loop: int = 0,
-    strength: int | None = None,
+    name: str,
+    description: str,
 ) -> str:
-    """Design and play a custom waveform by defining a sequence of steps on a Coyote channel.
+    """Design a custom waveform and save it to the wave library for later playback.
 
-    Creates any pattern: ramps, pulses, rhythms, etc. Each step is 100ms of output.
+    After saving, use play_wave(alias, name) to play it on a device channel.
+    See waves://guide for a full explanation of parameters and sensation patterns.
 
     Args:
-        alias: Channel alias assigned at connect time
         steps: List of step objects, each with:
-            - freq: wave frequency in ms (10–1000, lower = higher frequency pulse)
+            - freq: wave period in ms (10–1000, lower = higher frequency / sharper feel)
             - intensity: wave intensity (0–100, 0=silent, 100=strongest)
             - repeat: optional, repeat this step N times (default 1)
-        loop: 0 = loop infinitely (default); N = play exactly N times then stop
-        strength: Optional strength percentage (0–100) to set before playing.
-                  If omitted, current strength is kept.
+        name: Unique name for this wave (used with play_wave)
+        description: Short description of what this wave does or feels like
 
     Example steps for a gradual ramp up then sudden drop:
         [
@@ -295,35 +363,16 @@ async def design_wave(
             {"freq": 10, "intensity": 0, "repeat": 2}
         ]
     """
-    strength_desc = ""
-    if strength is not None:
-        if strength < 0 or strength > 100:
-            return "Error: Strength must be 0–100."
-        try:
-            effective = manager.set_strength(alias, strength)
-        except ValueError as e:
-            return f"Error: {e}"
-        strength_desc = f", strength={strength}%"
-        if effective < strength:
-            strength_desc += f" (limited to {effective}% by pain endurance limit)"
-
     if not steps:
         return "Error: steps list cannot be empty."
+    if not name:
+        return "Error: name cannot be empty."
     try:
-        frames = steps_to_frames(steps)
+        steps_to_frames(steps)  # validate before saving
     except (KeyError, TypeError) as e:
         return f"Error: Invalid step format: {e}. Each step needs 'freq' and 'intensity'."
-
-    try:
-        manager.send_wave(alias, frames, loop=loop)
-    except ValueError as e:
-        return f"Error: {e}"
-
-    loop_desc = "looping" if loop == 0 else f"{loop}x"
-    return (
-        f"Custom wave ({len(frames)} frames, {len(frames) * 100}ms) "
-        f"playing on '{alias}' ({loop_desc}{strength_desc})."
-    )
+    save_wave(name, steps, description)
+    return f"Wave '{name}' saved to library. Use play_wave(alias, '{name}') to play it."
 
 
 @mcp.tool()
