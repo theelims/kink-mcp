@@ -1,58 +1,76 @@
 """MCP Server for DG-Lab Coyote and Lovense devices."""
 
+import asyncio
 import json
 import logging
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
+from .config import load_config, save_config
 from .device import CoyoteDevice, DeviceManager
-from .waves import get_frames, load_waves, save_wave, steps_to_frames
+from .waves import get_frames, load_waves, steps_to_frames
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Config is loaded once in main() and stored here for the MCP resource callbacks.
+_config: dict = {}
+_ui_url: str = ""
+
 mcp = FastMCP(
     "DG-Lab Coyote & Lovense",
     instructions=(
-        "Control DG-Lab Coyote electro-stimulation devices and Lovense vibrator toys via Bluetooth. "
+        "Control DG-Lab Coyote electro-stimulation devices and Lovense vibration toys via Bluetooth. "
         "\n\n"
-        "COYOTE (e-stim): each device has two channels (A and B), each gets its own alias. "
-        "Use set_strength, adjust_strength, set_strength_limit, play_wave, design_wave, stop_wave. "
-        "Typical flow: scan → connect(address, alias_a, alias_b) → set_strength → play_wave. "
+        "DEVICE MANAGEMENT is handled by the web UI — NOT by AI tools. "
+        "Read the ui://url resource to get the control panel link and share it with the user "
+        "so they can scan, connect, and disconnect devices before issuing commands. "
         "\n\n"
-        "LOVENSE (vibration): each toy has one channel. alias_b is not needed. "
+        "COYOTE (e-stim): each device has two channels (A and B), each with its own alias. "
+        "Use set_strength, adjust_strength, play_wave, design_wave, stop_wave. "
+        "Typical flow: user connects via UI → set_strength → play_wave. "
+        "\n\n"
+        "LOVENSE (vibration): each toy has one channel. "
         "Use vibrate(alias, strength) to set intensity 0–100% (0 = stop). "
-        "Typical flow: scan → connect(address, alias_a) → vibrate(alias, strength). "
         "\n\n"
         "GENERAL: Strength range 0–100%. Always start low (5–10%) and increase gradually. "
+        "Available Coyote wave presets: breath, tide, pulse_low, pulse_mid, pulse_high, tap. "
         "loop=0 means infinite loop; loop=N plays the wave N times then stops. "
-        "Read the devices://status resource for a live snapshot of all connected devices before issuing commands. "
+        "Read the devices://status resource for a live snapshot of all connected devices. "
         "Read waves://library for all available wave names and descriptions. "
-        "To create a custom wave: design_wave(steps, name, description) saves it to the library, "
-        "then play_wave(alias, name) plays it. "
         "Read waves://guide for a full explanation of wave parameters and how they feel."
-        "Call live_status() for a live snapshot of all connected devices before issuing commands."
     ),
 )
 
 manager = DeviceManager()
 
 
-@mcp.tool()
-def live_status() -> str:
-    """Live session snapshot: alias routing, current state, and activity timers.
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
 
-    Call this before issuing any commands to see what devices and aliases are connected.
-    """
+@mcp.resource("ui://url")
+def ui_url_resource() -> str:
+    """URL of the local web control panel. Share this link with the user."""
+    return _ui_url
+
+
+@mcp.resource("devices://status")
+def live_status() -> str:
+    """Live session snapshot: alias routing, current state, and activity timers."""
     s = manager.get_all_status()
     session = s.get("session", {})
     lines = [
+        f"Web UI: {_ui_url}",
         f"Session running since: {session.get('running_since') or 'not started'}",
         f"Connected devices: {s['connected_devices']}",
         "",
     ]
     if not s["aliases"]:
-        lines.append("No aliases registered. Call connect() first.")
+        lines.append(
+            "No aliases registered. Ask the user to open the web UI and connect their devices."
+        )
         return "\n".join(lines)
 
     for alias, channels in s["aliases"].items():
@@ -64,7 +82,7 @@ def live_status() -> str:
                 state = f"strength={ch['strength_pct']}%"
             else:
                 wave = "wave active" if ch["wave_active"] else "no wave"
-                tools = "set_strength / adjust_strength / set_strength_limit / play_wave / design_wave / stop_wave"
+                tools = "set_strength / adjust_strength / play_wave / design_wave / stop_wave"
                 state = f"strength={ch['strength_pct']}%  limit={ch['limit_pct']}%  {wave}"
             batt = f"{ch['battery']}%" if ch["battery"] >= 0 else "unknown"
             conn = "connected" if ch["connected"] else "DISCONNECTED"
@@ -142,59 +160,9 @@ Use repeat to hold a level steady without listing the same step multiple times.
 """
 
 
-@mcp.tool()
-async def scan(timeout: float = 5.0) -> str:
-    """Scan for nearby DG-Lab Coyote and Lovense devices.
-
-    Args:
-        timeout: Scan duration in seconds (default 5)
-
-    Returns:
-        JSON list of found devices with name, address, and type/version.
-    """
-    results = await manager.scan(timeout=timeout)
-    if not results:
-        return "No devices found. Make sure the device is powered on and Bluetooth is enabled."
-    return json.dumps(results, ensure_ascii=False)
-
-
-@mcp.tool()
-async def connect(address: str, alias_a: str, alias_b: str | None = None) -> str:
-    """Connect to a Coyote or Lovense device and assign channel alias(es).
-
-    Device type is detected automatically. Aliases are free-form labels (e.g. 'left_thigh', 'toy').
-    For Coyote devices both alias_a (channel A) and alias_b (channel B) are required.
-    For Lovense toys only alias_a is needed.
-
-    Args:
-        address: BLE address from scan results (e.g. "AA:BB:CC:DD:EE:FF")
-        alias_a: Label for channel A (Coyote) or the vibration channel (Lovense)
-        alias_b: Label for channel B — required for Coyote, omit for Lovense
-    """
-    try:
-        a, b = await manager.connect(address, alias_a=alias_a, alias_b=alias_b)
-        dev = manager._devices[-1]
-        battery = dev.state.battery
-        battery_str = f"{battery}%" if battery >= 0 else "unknown"
-        if b is None:
-            return (
-                f"Connected to {address}. Battery: {battery_str}. "
-                f"Vibration channel → '{a}'."
-            )
-        return (
-            f"Connected to {address}. Battery: {battery_str}. "
-            f"Channel A → '{a}', Channel B → '{b}'."
-        )
-    except Exception as e:
-        return f"Connection failed: {e}"
-
-
-@mcp.tool()
-async def disconnect() -> str:
-    """Disconnect from ALL connected devices and clear all aliases."""
-    await manager.disconnect_all()
-    return "All devices disconnected."
-
+# ---------------------------------------------------------------------------
+# Tools — strength & wave control (unchanged from before)
+# ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def set_strength(alias: str, value: int) -> str:
@@ -209,7 +177,7 @@ async def set_strength(alias: str, value: int) -> str:
     if value < 0 or value > 100:
         return "Error: Strength must be 0–100."
     try:
-        effective = manager.set_strength(alias, value)
+        manager.set_strength(alias, value)
     except ValueError as e:
         return f"Error: {e}"
     entries = manager._alias_map.get(alias, [])
@@ -219,8 +187,6 @@ async def set_strength(alias: str, value: int) -> str:
         if isinstance(dev, CoyoteDevice) and dev.state.connected
     )
     msg = f"'{alias}' strength set to {value}%."
-    if effective < value:
-        msg += f" Note: output limited to {effective}% by pain endurance limit."
     if not wave_active:
         msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
@@ -235,7 +201,7 @@ async def adjust_strength(alias: str, delta: int) -> str:
         delta: Percentage to change (positive = increase, negative = decrease)
     """
     try:
-        intended, effective = manager.adjust_strength(alias, delta)
+        manager.adjust_strength(alias, delta)
     except ValueError as e:
         return f"Error: {e}"
     direction = "increased" if delta > 0 else "decreased"
@@ -245,32 +211,10 @@ async def adjust_strength(alias: str, delta: int) -> str:
         for dev, ch in entries
         if isinstance(dev, CoyoteDevice) and dev.state.connected
     )
-    msg = f"'{alias}' strength {direction} by {abs(delta)}% (now at {effective}%)."
-    if effective < intended:
-        msg += f" Note: output limited to {effective}% by pain endurance limit."
+    msg = f"'{alias}' strength {direction} by {abs(delta)}%."
     if not wave_active:
         msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
-
-
-@mcp.tool()
-async def set_strength_limit(alias: str, limit: int) -> str:
-    """Set the pain endurance limit for a Coyote channel or group of synced channels.
-
-    Prevents the strength from exceeding this value. Setting a limit before
-    starting output is strongly recommended.
-
-    Args:
-        alias: Channel alias assigned at connect time
-        limit: Maximum strength percentage (0–100)
-    """
-    if limit < 0 or limit > 100:
-        return "Error: Limit must be 0–100."
-    try:
-        await manager.set_strength_limit(alias, limit)
-    except ValueError as e:
-        return f"Error: {e}"
-    return f"'{alias}' pain endurance limit set to {limit}%."
 
 
 @mcp.tool()
@@ -297,82 +241,75 @@ async def play_wave(
     loop: int = 0,
     strength: int | None = None,
 ) -> str:
-    """Play a wave from the library on a Coyote channel or group of synced channels.
-
-    See waves://library for all available wave names and descriptions.
+    """Play a preset waveform on a Coyote channel or group of synced channels.
 
     Args:
         alias: Channel alias assigned at connect time
-        preset: Wave name from the library (e.g. "breath", "tide", or any designed wave)
+        preset: Preset name — breath, tide, pulse_low, pulse_mid, pulse_high, tap
         loop: 0 = loop infinitely (default); N = play exactly N times then stop
         strength: Optional strength percentage (0–100) to set before playing.
-                  If omitted, current strength is kept.
     """
-    strength_desc = ""
     if strength is not None:
         if strength < 0 or strength > 100:
             return "Error: Strength must be 0–100."
         try:
-            effective = manager.set_strength(alias, strength)
+            manager.set_strength(alias, strength)
         except ValueError as e:
             return f"Error: {e}"
-        strength_desc = f", strength={strength}%"
-        if effective < strength:
-            strength_desc += f" (limited to {effective}% by pain endurance limit)"
-
     try:
         frames = get_frames(preset)
-    except ValueError as e:
-        return str(e)
-
+    except (KeyError, ValueError) as e:
+        return f"Error: Unknown preset '{preset}'. {e}"
     try:
         manager.send_wave(alias, frames, loop=loop)
     except ValueError as e:
         return f"Error: {e}"
-
     loop_desc = "looping" if loop == 0 else f"{loop}x"
+    strength_desc = f", strength={strength}%" if strength is not None else ""
     return f"Preset '{preset}' playing on '{alias}' ({loop_desc}{strength_desc})."
 
 
 @mcp.tool()
 async def design_wave(
+    alias: str,
     steps: list[dict],
-    name: str,
-    description: str,
+    loop: int = 0,
+    strength: int | None = None,
 ) -> str:
-    """Design a custom waveform and save it to the wave library for later playback.
-
-    After saving, use play_wave(alias, name) to play it on a device channel.
-    See waves://guide for a full explanation of parameters and sensation patterns.
+    """Design and play a custom waveform by defining a sequence of steps on a Coyote channel.
 
     Args:
+        alias: Channel alias assigned at connect time
         steps: List of step objects, each with:
-            - freq: wave period in ms (10–1000, lower = higher frequency / sharper feel)
+            - freq: wave frequency in ms (10–1000, lower = higher frequency pulse)
             - intensity: wave intensity (0–100, 0=silent, 100=strongest)
             - repeat: optional, repeat this step N times (default 1)
-        name: Unique name for this wave (used with play_wave)
-        description: Short description of what this wave does or feels like
-
-    Example steps for a gradual ramp up then sudden drop:
-        [
-            {"freq": 10, "intensity": 0},
-            {"freq": 10, "intensity": 25},
-            {"freq": 10, "intensity": 50},
-            {"freq": 10, "intensity": 75},
-            {"freq": 10, "intensity": 100, "repeat": 3},
-            {"freq": 10, "intensity": 0, "repeat": 2}
-        ]
+        loop: 0 = loop infinitely (default); N = play exactly N times then stop
+        strength: Optional strength percentage (0–100) to set before playing.
     """
+    if strength is not None:
+        if strength < 0 or strength > 100:
+            return "Error: Strength must be 0–100."
+        try:
+            manager.set_strength(alias, strength)
+        except ValueError as e:
+            return f"Error: {e}"
     if not steps:
         return "Error: steps list cannot be empty."
-    if not name:
-        return "Error: name cannot be empty."
     try:
-        steps_to_frames(steps)  # validate before saving
+        frames = steps_to_frames(steps)
     except (KeyError, TypeError) as e:
         return f"Error: Invalid step format: {e}. Each step needs 'freq' and 'intensity'."
-    save_wave(name, steps, description)
-    return f"Wave '{name}' saved to library. Use play_wave(alias, '{name}') to play it."
+    try:
+        manager.send_wave(alias, frames, loop=loop)
+    except ValueError as e:
+        return f"Error: {e}"
+    loop_desc = "looping" if loop == 0 else f"{loop}x"
+    strength_desc = f", strength={strength}%" if strength is not None else ""
+    return (
+        f"Custom wave ({len(frames)} frames, {len(frames) * 100}ms) "
+        f"playing on '{alias}' ({loop_desc}{strength_desc})."
+    )
 
 
 @mcp.tool()
@@ -397,8 +334,92 @@ async def get_status() -> str:
     return json.dumps(status, ensure_ascii=False)
 
 
-def main():
-    mcp.run()
+# ---------------------------------------------------------------------------
+# Conditionally register set_pain_limit based on config toggle
+# (called from main() after config is loaded)
+# ---------------------------------------------------------------------------
+
+def _register_pain_limit_tool() -> None:
+    @mcp.tool()
+    async def set_pain_limit(alias: str, limit: int) -> str:
+        """Set the pain (strength) soft limit for a Coyote channel or group of synced channels.
+
+        Prevents the strength from exceeding this value. The user has enabled this tool
+        via the web UI. Ask for confirmation before lowering a limit already in use.
+
+        Args:
+            alias: Channel alias assigned at connect time
+            limit: Maximum strength percentage (0–100)
+        """
+        if limit < 0 or limit > 100:
+            return "Error: Limit must be 0–100."
+        try:
+            await manager.set_pain_limit(alias, limit)
+        except ValueError as e:
+            return f"Error: {e}"
+        return f"'{alias}' pain limit set to {limit}%."
+
+
+# ---------------------------------------------------------------------------
+# Startup helpers
+# ---------------------------------------------------------------------------
+
+async def _auto_reconnect(config: dict) -> None:
+    """Try to reconnect all devices from the persisted device list."""
+    devices = config.get("devices", [])
+    if not devices:
+        return
+
+    async def _try_connect(dev_info: dict) -> None:
+        address = dev_info["address"]
+        alias_a = dev_info["alias_a"]
+        alias_b = dev_info.get("alias_b")
+        limit_a = dev_info.get("limit_a_pct", 100)
+        limit_b = dev_info.get("limit_b_pct", 100)
+        try:
+            a, b = await manager.connect(address, alias_a=alias_a, alias_b=alias_b)
+            if limit_a < 100:
+                await manager.set_pain_limit(a, limit_a)
+            if b and limit_b is not None and limit_b < 100:
+                await manager.set_pain_limit(b, limit_b)
+            logger.info("Auto-reconnected %s ('%s')", address, alias_a)
+        except Exception as exc:
+            logger.warning("Auto-reconnect failed for %s: %s", address, exc)
+            manager.add_offline_device(dev_info)
+
+    await asyncio.gather(*[_try_connect(d) for d in devices], return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    asyncio.run(_main())
+
+
+async def _main() -> None:
+    global _config, _ui_url
+
+    from .ui import create_app, find_free_port, run_web_server
+
+    _config = load_config()
+
+    if _config.get("pain_limit_exposed_to_llm", False):
+        _register_pain_limit_tool()
+
+    port = find_free_port()
+    _ui_url = f"http://localhost:{port}"
+    print(f"kink-mcp UI: {_ui_url}", file=sys.stderr, flush=True)
+
+    app = create_app(manager, _config)
+
+    await _auto_reconnect(_config)
+
+    await asyncio.gather(
+        mcp.run_stdio_async(),
+        run_web_server(app, port),
+    )
 
 
 if __name__ == "__main__":
