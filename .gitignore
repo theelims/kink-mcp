@@ -7,3 +7,4 @@ build/
 .env
 .claude/
 DG-LAB-OPENSOURCE/
+.superpowers

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(
     "DG-Lab Coyote & Lovense",
     instructions=(
-        "Control DG-Lab Coyote pulse devices and Lovense vibration toys via Bluetooth. "
+        "Control DG-Lab Coyote electro-stimulation devices and Lovense vibrator toys via Bluetooth. "
         "\n\n"
         "COYOTE (e-stim): each device has two channels (A and B), each gets its own alias. "
         "Use set_strength, adjust_strength, set_strength_limit, play_wave, design_wave, stop_wave. "
@@ -31,15 +31,19 @@ mcp = FastMCP(
         "To create a custom wave: design_wave(steps, name, description) saves it to the library, "
         "then play_wave(alias, name) plays it. "
         "Read waves://guide for a full explanation of wave parameters and how they feel."
+        "Call live_status() for a live snapshot of all connected devices before issuing commands."
     ),
 )
 
 manager = DeviceManager()
 
 
-@mcp.resource("devices://status")
+@mcp.tool()
 def live_status() -> str:
-    """Live session snapshot: alias routing, current state, and activity timers."""
+    """Live session snapshot: alias routing, current state, and activity timers.
+
+    Call this before issuing any commands to see what devices and aliases are connected.
+    """
     s = manager.get_all_status()
     session = s.get("session", {})
     lines = [
@@ -205,7 +209,7 @@ async def set_strength(alias: str, value: int) -> str:
     if value < 0 or value > 100:
         return "Error: Strength must be 0–100."
     try:
-        manager.set_strength(alias, value)
+        effective = manager.set_strength(alias, value)
     except ValueError as e:
         return f"Error: {e}"
     entries = manager._alias_map.get(alias, [])
@@ -215,6 +219,8 @@ async def set_strength(alias: str, value: int) -> str:
         if isinstance(dev, CoyoteDevice) and dev.state.connected
     )
     msg = f"'{alias}' strength set to {value}%."
+    if effective < value:
+        msg += f" Note: output limited to {effective}% by pain endurance limit."
     if not wave_active:
         msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
@@ -229,7 +235,7 @@ async def adjust_strength(alias: str, delta: int) -> str:
         delta: Percentage to change (positive = increase, negative = decrease)
     """
     try:
-        manager.adjust_strength(alias, delta)
+        intended, effective = manager.adjust_strength(alias, delta)
     except ValueError as e:
         return f"Error: {e}"
     direction = "increased" if delta > 0 else "decreased"
@@ -239,7 +245,9 @@ async def adjust_strength(alias: str, delta: int) -> str:
         for dev, ch in entries
         if isinstance(dev, CoyoteDevice) and dev.state.connected
     )
-    msg = f"'{alias}' strength {direction} by {abs(delta)}%."
+    msg = f"'{alias}' strength {direction} by {abs(delta)}% (now at {effective}%)."
+    if effective < intended:
+        msg += f" Note: output limited to {effective}% by pain endurance limit."
     if not wave_active:
         msg += " Note: no active waveform on this alias — consider sending a wave for output."
     return msg
@@ -247,10 +255,10 @@ async def adjust_strength(alias: str, delta: int) -> str:
 
 @mcp.tool()
 async def set_strength_limit(alias: str, limit: int) -> str:
-    """Set the strength soft limit for a Coyote channel or group of synced channels.
+    """Set the pain endurance limit for a Coyote channel or group of synced channels.
 
     Prevents the strength from exceeding this value. Setting a limit before
-    starting output is recommended for safety.
+    starting output is strongly recommended.
 
     Args:
         alias: Channel alias assigned at connect time
@@ -262,7 +270,7 @@ async def set_strength_limit(alias: str, limit: int) -> str:
         await manager.set_strength_limit(alias, limit)
     except ValueError as e:
         return f"Error: {e}"
-    return f"'{alias}' strength limit set to {limit}%."
+    return f"'{alias}' pain endurance limit set to {limit}%."
 
 
 @mcp.tool()
@@ -300,13 +308,17 @@ async def play_wave(
         strength: Optional strength percentage (0–100) to set before playing.
                   If omitted, current strength is kept.
     """
+    strength_desc = ""
     if strength is not None:
         if strength < 0 or strength > 100:
             return "Error: Strength must be 0–100."
         try:
-            manager.set_strength(alias, strength)
+            effective = manager.set_strength(alias, strength)
         except ValueError as e:
             return f"Error: {e}"
+        strength_desc = f", strength={strength}%"
+        if effective < strength:
+            strength_desc += f" (limited to {effective}% by pain endurance limit)"
 
     try:
         frames = get_frames(preset)
@@ -319,7 +331,6 @@ async def play_wave(
         return f"Error: {e}"
 
     loop_desc = "looping" if loop == 0 else f"{loop}x"
-    strength_desc = f", strength={strength}%" if strength is not None else ""
     return f"Preset '{preset}' playing on '{alias}' ({loop_desc}{strength_desc})."
 
 

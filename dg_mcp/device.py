@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import humanize
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient, BleakScanner, BLEDevice
 
 from .lovense import LovenseDevice, is_lovense_name, LOVENSE_NAME_PREFIXES
 from .protocol import (
@@ -194,7 +194,7 @@ class CoyoteDevice:
             raise ValueError(f"Invalid channel: {channel}")
 
     async def set_strength_limit(self, limit_a: int, limit_b: int) -> None:
-        """Set strength soft limits.
+        """Set pain endurance limits.
 
         V3: persisted on device via BF command.
         V2: software-enforced cap applied in the write loop.
@@ -528,6 +528,7 @@ class DeviceManager:
         self._alias_map: dict[str, list[tuple[CoyoteDevice | LovenseDevice, str]]] = {}
         self._session_start: datetime | None = None
         self._alias_last_activity: dict[str, datetime] = {}
+        self._scanned_devices: dict[str, BLEDevice] = {}
 
     async def scan(self, timeout: float = 5.0) -> list[dict]:
         """Scan for nearby Coyote (V2/V3) and Lovense devices.
@@ -535,6 +536,9 @@ class DeviceManager:
         Returns list of dicts with name, address, and version/type.
         """
         devices = await BleakScanner.discover(timeout=timeout)
+        # Cache all discovered BLEDevice objects so connect() can reuse them
+        # without a second BLE scan (which can fail on Windows with an active connection).
+        self._scanned_devices = {d.address: d for d in devices}
         results = []
         for d in devices:
             name = d.name or ""
@@ -562,7 +566,11 @@ class DeviceManager:
         if not alias_a:
             raise ValueError("alias_a must be a non-empty string.")
 
-        ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
+        # Use cached BLEDevice from scan if available; avoids a second BLE scan
+        # that can fail on Windows while another device is already connected.
+        ble_device = self._scanned_devices.get(address)
+        if ble_device is None:
+            ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
         if ble_device is None:
             raise ValueError(f"Device {address} not found. Make sure it is powered on.")
 
@@ -570,7 +578,7 @@ class DeviceManager:
 
         if is_lovense_name(name):
             dev = LovenseDevice()
-            await dev.connect(address, name=name)
+            await dev.connect(ble_device, name=name)
             self._devices.append(dev)
             self._alias_map.setdefault(alias_a, []).append((dev, "V"))
             logger.info("Registered Lovense alias '%s' for %s", alias_a, address)
@@ -636,8 +644,11 @@ class DeviceManager:
             self._session_start = now
         self._alias_last_activity[alias] = now
 
-    def set_strength(self, alias: str, pct: int) -> None:
-        """Set absolute strength for all Coyote channels with this alias (0–100%)."""
+    def set_strength(self, alias: str, pct: int) -> int:
+        """Set absolute strength for all Coyote channels with this alias (0–100%).
+
+        Returns the effective percentage after applying the pain endurance limit.
+        """
         entries = self._resolve(alias)
         coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
         if not coyote_pairs:
@@ -645,9 +656,17 @@ class DeviceManager:
         raw = _pct_to_raw(pct)
         for dev, ch in coyote_pairs:
             dev.set_strength(ch, raw)
+        effective_raw = min(
+            dev.state.limit_a if ch == "A" else dev.state.limit_b
+            for dev, ch in coyote_pairs
+        )
+        return _raw_to_pct(min(raw, effective_raw))
 
-    def adjust_strength(self, alias: str, delta_pct: int) -> None:
-        """Increase or decrease strength for all Coyote channels with this alias (delta in %)."""
+    def adjust_strength(self, alias: str, delta_pct: int) -> tuple[int, int]:
+        """Increase or decrease strength for all Coyote channels with this alias (delta in %).
+
+        Returns (intended_pct, effective_pct) where effective may be lower due to pain endurance limit.
+        """
         entries = self._resolve(alias)
         coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
         if not coyote_pairs:
@@ -655,9 +674,19 @@ class DeviceManager:
         raw_delta = delta_pct * 2
         for dev, ch in coyote_pairs:
             dev.add_strength(ch, raw_delta)
+        dev, ch = coyote_pairs[0]
+        if ch == "A":
+            target_raw = dev.state.strength_a + dev.state._pending_strength_a
+            limit_raw = dev.state.limit_a
+        else:
+            target_raw = dev.state.strength_b + dev.state._pending_strength_b
+            limit_raw = dev.state.limit_b
+        intended_raw = max(STRENGTH_MIN, min(STRENGTH_MAX, target_raw))
+        effective_raw = max(STRENGTH_MIN, min(limit_raw, target_raw))
+        return _raw_to_pct(intended_raw), _raw_to_pct(effective_raw)
 
     async def set_strength_limit(self, alias: str, limit_pct: int) -> None:
-        """Set strength soft limit for all Coyote channels with this alias (0–100%)."""
+        """Set pain endurance limit for all Coyote channels with this alias (0–100%)."""
         entries = self._resolve(alias)
         coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
         if not coyote_pairs:

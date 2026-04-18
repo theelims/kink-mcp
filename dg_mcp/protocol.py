@@ -96,8 +96,8 @@ def build_bf(
     """Build a 7-byte BF instruction.
 
     Args:
-        limit_a: A channel strength soft limit (0~200)
-        limit_b: B channel strength soft limit (0~200)
+        limit_a: A channel pain endurance limit (0~200)
+        limit_b: B channel pain endurance limit (0~200)
         balance_freq_a: A channel frequency balance param (0~255)
         balance_freq_b: B channel frequency balance param (0~255)
         balance_int_a: A channel intensity balance param (0~255)

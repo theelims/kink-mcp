@@ -1,3 +1,5 @@
+# Claudes Behavior
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -59,3 +61,9 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+# Project Specific Rules
+
+** IMPORTANT **
+
+- Always check README.md if it needs to be updated with the planned changes. If it needs an update, add this to the plan.

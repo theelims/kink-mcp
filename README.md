@@ -13,7 +13,8 @@
 - 🎛️ **11 Tools** — Scan, connect, strength control, waveform playback, custom waveform design, vibration, status query
 - 🌊 **Wave Library** — 6 built-in presets; design and save unlimited custom waves via `design_wave`
 - 📚 **3 Resources** — Live device status, wave library listing, wave design guide
-- 🔒 **Safety Protection** — Soft strength limit to prevent AI misoperation
+- 🔒 **Pain Endurance Limit** — Configurable ceiling to prevent AI from exceeding user-defined intensity
+
 - ⏱️ **Session Timer** — Track session start time and per-alias last-activity timestamps
 
 ## 📦 Installation
@@ -126,7 +127,7 @@ set_strength("outer", 25)  # sets both devices' 'outer' channels simultaneously
 | ❌ `disconnect` | Disconnect all devices | `disconnect()` |
 | ⚡ `set_strength` | Set Coyote channel strength 0–100% | `set_strength("left_thigh", 10)` |
 | ➕ `adjust_strength` | Increase or decrease Coyote strength | `adjust_strength("left_thigh", 5)` |
-| 🔒 `set_strength_limit` | Set soft strength limit 0–100% (Coyote) | `set_strength_limit("left_thigh", 50)` |
+| 🔒 `set_strength_limit` | Set pain endurance limit 0–100% (Coyote) | `set_strength_limit("left_thigh", 50)` |
 | 📳 `vibrate` | Set Lovense vibration intensity 0–100% | `vibrate("toy", 40)` |
 | 🌊 `play_wave` | Play a wave from the library (Coyote) | `play_wave("left_thigh", preset="breath")` |
 | 🎨 `design_wave` | Save a custom wave to the library | `design_wave(steps=[...], name="ramp", description="...")` |
@@ -218,7 +219,7 @@ Every `play_wave` or `vibrate` call records activity timestamps. These appear in
 > 🚨 **Important! Please read carefully!**
 
 1. ⚡ **Start at low intensity** — For first use, set strength to `5–10%` and increase gradually
-2. 🔒 **Set a soft limit** — Use `set_strength_limit` to cap the maximum strength and prevent accidents
+2. 🔒 **Set a pain endurance limit** — Use `set_strength_limit` to cap the maximum strength before starting
 3. 🚫 **Emergency stop** — Turn off the device power directly to immediately stop all output
 4. 💓 **Restricted areas** — Do not place electrodes near the heart, neck, or head
 5. 🤖 **AI is not human** — AI cannot perceive your actual experience; adjust or stop manually at any time
