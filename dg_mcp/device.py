@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import humanize
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient, BleakScanner, BLEDevice
 
 from .lovense import LovenseDevice, is_lovense_name, LOVENSE_NAME_PREFIXES
 from .protocol import (
@@ -528,6 +528,7 @@ class DeviceManager:
         self._alias_map: dict[str, list[tuple[CoyoteDevice | LovenseDevice, str]]] = {}
         self._session_start: datetime | None = None
         self._alias_last_activity: dict[str, datetime] = {}
+        self._scanned_devices: dict[str, BLEDevice] = {}
 
     async def scan(self, timeout: float = 5.0) -> list[dict]:
         """Scan for nearby Coyote (V2/V3) and Lovense devices.
@@ -535,6 +536,9 @@ class DeviceManager:
         Returns list of dicts with name, address, and version/type.
         """
         devices = await BleakScanner.discover(timeout=timeout)
+        # Cache all discovered BLEDevice objects so connect() can reuse them
+        # without a second BLE scan (which can fail on Windows with an active connection).
+        self._scanned_devices = {d.address: d for d in devices}
         results = []
         for d in devices:
             name = d.name or ""
@@ -562,7 +566,11 @@ class DeviceManager:
         if not alias_a:
             raise ValueError("alias_a must be a non-empty string.")
 
-        ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
+        # Use cached BLEDevice from scan if available; avoids a second BLE scan
+        # that can fail on Windows while another device is already connected.
+        ble_device = self._scanned_devices.get(address)
+        if ble_device is None:
+            ble_device = await BleakScanner.find_device_by_address(address, timeout=10.0)
         if ble_device is None:
             raise ValueError(f"Device {address} not found. Make sure it is powered on.")
 

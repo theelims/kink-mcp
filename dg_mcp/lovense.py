@@ -22,6 +22,12 @@ GEN1_SERVICE     = "0000fff0-0000-1000-8000-00805f9b34fb"
 GEN1_WRITE_UUID  = "0000fff2-0000-1000-8000-00805f9b34fb"
 GEN1_NOTIFY_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
 
+# Gen 3 — variable service UUID, constant suffix (Gush, newer devices)
+# Pattern: XY300001-00ZW-4bd4-bbd5-a6920e4c5653
+# TX (write):  XY300002-00ZW-4bd4-bbd5-a6920e4c5653
+# RX (notify): XY300003-00ZW-4bd4-bbd5-a6920e4c5653
+GEN3_UUID_SUFFIX = "4bd4-bbd5-a6920e4c5653"
+
 VIBRATE_MAX = 20  # Lovense internal scale: 0–20
 
 
@@ -69,14 +75,28 @@ class LovenseDevice:
 
         # Determine which UUID set to use
         services = [str(s.uuid).lower() for s in self._client.services]
+        gen3_svc = next((s for s in services if s.endswith(GEN3_UUID_SUFFIX)), None)
         if UART_SERVICE.lower() in services:
             self._write_uuid = UART_WRITE_UUID
             notify_uuid = UART_NOTIFY_UUID
             logger.debug("Lovense: Gen 2 (UART) detected")
-        else:
+        elif gen3_svc is not None:
+            # Derive TX/RX from service UUID: position 7 changes 1→2 (TX) or 1→3 (RX)
+            self._write_uuid = gen3_svc[:7] + "2" + gen3_svc[8:]
+            notify_uuid      = gen3_svc[:7] + "3" + gen3_svc[8:]
+            logger.debug("Lovense: Gen 3 detected (service=%s)", gen3_svc)
+        elif GEN1_SERVICE.lower() in services:
             self._write_uuid = GEN1_WRITE_UUID
             notify_uuid = GEN1_NOTIFY_UUID
             logger.debug("Lovense: Gen 1 detected")
+        else:
+            logger.warning(
+                "Lovense: No known service UUID found. Available services: %s. "
+                "Defaulting to Gen 2 (UART).",
+                services,
+            )
+            self._write_uuid = UART_WRITE_UUID
+            notify_uuid = UART_NOTIFY_UUID
 
         try:
             await self._client.start_notify(notify_uuid, self._on_notify)
