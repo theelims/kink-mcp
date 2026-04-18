@@ -529,6 +529,8 @@ class DeviceManager:
         self._session_start: datetime | None = None
         self._alias_last_activity: dict[str, datetime] = {}
         self._scanned_devices: dict[str, BLEDevice] = {}
+        self._device_meta: dict[str, dict] = {}
+        # address -> {address, name, device_type, version, alias_a, alias_b, limit_a_pct, limit_b_pct}
 
     async def scan(self, timeout: float = 5.0) -> list[dict]:
         """Scan for nearby Coyote (V2/V3) and Lovense devices.
@@ -582,6 +584,17 @@ class DeviceManager:
             self._devices.append(dev)
             self._alias_map.setdefault(alias_a, []).append((dev, "V"))
             logger.info("Registered Lovense alias '%s' for %s", alias_a, address)
+            existing = self._device_meta.get(address, {})
+            self._device_meta[address] = {
+                "address": address,
+                "name": name,
+                "device_type": "lovense",
+                "version": "",
+                "alias_a": alias_a,
+                "alias_b": None,
+                "limit_a_pct": existing.get("limit_a_pct", 100),
+                "limit_b_pct": None,
+            }
             return alias_a, None
 
         # Coyote path
@@ -605,6 +618,17 @@ class DeviceManager:
         self._alias_map.setdefault(alias_b, []).append((dev, "B"))
 
         logger.info("Registered aliases '%s' (A) and '%s' (B) for %s", alias_a, alias_b, address)
+        existing = self._device_meta.get(address, {})
+        self._device_meta[address] = {
+            "address": address,
+            "name": name,
+            "device_type": "coyote",
+            "version": version,
+            "alias_a": alias_a,
+            "alias_b": alias_b,
+            "limit_a_pct": existing.get("limit_a_pct", 100),
+            "limit_b_pct": existing.get("limit_b_pct", 100),
+        }
         return alias_a, alias_b
 
     async def disconnect_all(self) -> None:
@@ -617,6 +641,81 @@ class DeviceManager:
         self._alias_map.clear()
         self._session_start = None
         self._alias_last_activity.clear()
+
+    def add_offline_device(self, meta: dict) -> None:
+        """Register a known device as offline (e.g. from persisted config that failed to reconnect).
+
+        Does nothing if the address is already tracked.
+        """
+        address = meta["address"]
+        if address not in self._device_meta:
+            self._device_meta[address] = {k: v for k, v in meta.items()}
+
+    def get_device_list(self) -> list[dict]:
+        """Return per-device status list for the UI, including offline devices."""
+        dev_by_addr = {d.state.address: d for d in self._devices}
+        result = []
+        for address, meta in self._device_meta.items():
+            dev = dev_by_addr.get(address)
+            connected = dev is not None and dev.state.connected
+            battery = dev.state.battery if connected else -1
+            if connected and meta["device_type"] == "coyote":
+                limit_a = _raw_to_pct(dev.state.limit_a)
+                limit_b = _raw_to_pct(dev.state.limit_b)
+            else:
+                limit_a = meta.get("limit_a_pct", 100)
+                limit_b = meta.get("limit_b_pct", 100) if meta.get("alias_b") else None
+            result.append({
+                "address": address,
+                "name": meta["name"],
+                "device_type": meta["device_type"],
+                "version": meta.get("version", ""),
+                "alias_a": meta["alias_a"],
+                "alias_b": meta.get("alias_b"),
+                "connected": connected,
+                "battery": battery,
+                "limit_a": limit_a,
+                "limit_b": limit_b,
+            })
+        return result
+
+    async def disconnect_one(self, address: str) -> None:
+        """Disconnect a single device by BLE address and remove its aliases."""
+        dev = next((d for d in self._devices if d.state.address == address), None)
+        if dev is None:
+            raise ValueError(f"No device with address '{address}' is currently tracked.")
+
+        for alias in list(self._alias_map.keys()):
+            entries = [(d, ch) for d, ch in self._alias_map[alias] if d is not dev]
+            if entries:
+                self._alias_map[alias] = entries
+            else:
+                del self._alias_map[alias]
+                self._alias_last_activity.pop(alias, None)
+
+        await dev.disconnect()
+        self._devices.remove(dev)
+        self._device_meta.pop(address, None)
+
+    def rename_alias(self, old_alias: str, new_alias: str) -> None:
+        """Rename a channel alias everywhere it appears."""
+        if old_alias not in self._alias_map:
+            raise ValueError(f"Unknown alias '{old_alias}'.")
+        if old_alias == new_alias:
+            return
+
+        entries = self._alias_map.pop(old_alias)
+        existing = self._alias_map.get(new_alias, [])
+        self._alias_map[new_alias] = existing + entries
+
+        if old_alias in self._alias_last_activity:
+            self._alias_last_activity[new_alias] = self._alias_last_activity.pop(old_alias)
+
+        for meta in self._device_meta.values():
+            if meta.get("alias_a") == old_alias:
+                meta["alias_a"] = new_alias
+            if meta.get("alias_b") == old_alias:
+                meta["alias_b"] = new_alias
 
     def _resolve(self, alias: str) -> list[tuple[CoyoteDevice | LovenseDevice, str]]:
         """Resolve an alias to a list of (device, channel) pairs.
@@ -685,8 +784,16 @@ class DeviceManager:
         effective_raw = max(STRENGTH_MIN, min(limit_raw, target_raw))
         return _raw_to_pct(intended_raw), _raw_to_pct(effective_raw)
 
-    async def set_strength_limit(self, alias: str, limit_pct: int) -> None:
-        """Set pain endurance limit for all Coyote channels with this alias (0–100%)."""
+    async def set_pain_limit(self, alias: str, limit_pct: int) -> None:
+        """Set the pain (strength) soft limit for all Coyote channels with this alias (0–100%).
+
+        Prevents strength from exceeding this value. Setting a limit before
+        starting output is recommended for safety.
+
+        Args:
+            alias: Channel alias assigned at connect time
+            limit_pct: Maximum strength percentage (0–100)
+        """
         entries = self._resolve(alias)
         coyote_pairs = [(dev, ch) for dev, ch in entries if isinstance(dev, CoyoteDevice)]
         if not coyote_pairs:
@@ -697,6 +804,12 @@ class DeviceManager:
                 await dev.set_strength_limit(raw, dev.state.limit_b)
             else:
                 await dev.set_strength_limit(dev.state.limit_a, raw)
+            addr = dev.state.address
+            if addr in self._device_meta:
+                if ch == "A":
+                    self._device_meta[addr]["limit_a_pct"] = limit_pct
+                else:
+                    self._device_meta[addr]["limit_b_pct"] = limit_pct
 
     def send_wave(self, alias: str, frames: list[WaveFrame], loop: int = 0) -> None:
         """Send waveform frames to all Coyote channels with this alias."""
