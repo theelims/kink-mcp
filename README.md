@@ -30,9 +30,10 @@ Open the URL in your browser. The UI provides:
 
 - **Scan & Connect** — discover nearby devices and assign channel aliases
 - **Connected Devices** — live list with battery, connection state, and per-device Disconnect
+- **Forget offline devices** — remove retired/replaced devices from the device list
 - **Alias Rename** — click any alias badge to rename it on the fly
 - **Pain Limit matrix** — set per-channel soft strength caps with sliders
-- **LLM toggle** — expose `set_pain_limit` to the AI (off by default); restart required
+- **LLM toggle** — expose `set_pain_limit` to the AI (off by default); takes effect immediately
 
 The AI can also read the `ui://url` resource to retrieve the link and share it with you.
 

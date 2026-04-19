@@ -334,30 +334,26 @@ async def get_status() -> str:
     return json.dumps(status, ensure_ascii=False)
 
 
-# ---------------------------------------------------------------------------
-# Conditionally register set_pain_limit based on config toggle
-# (called from main() after config is loaded)
-# ---------------------------------------------------------------------------
+@mcp.tool()
+async def set_pain_limit(alias: str, limit: int) -> str:
+    """Set the pain (strength) soft limit for a Coyote channel or group of synced channels.
 
-def _register_pain_limit_tool() -> None:
-    @mcp.tool()
-    async def set_pain_limit(alias: str, limit: int) -> str:
-        """Set the pain (strength) soft limit for a Coyote channel or group of synced channels.
+    Prevents the strength from exceeding this value. The user has enabled this tool
+    via the web UI. Ask for confirmation before lowering a limit already in use.
 
-        Prevents the strength from exceeding this value. The user has enabled this tool
-        via the web UI. Ask for confirmation before lowering a limit already in use.
-
-        Args:
-            alias: Channel alias assigned at connect time
-            limit: Maximum strength percentage (0–100)
-        """
-        if limit < 0 or limit > 100:
-            return "Error: Limit must be 0–100."
-        try:
-            await manager.set_pain_limit(alias, limit)
-        except ValueError as e:
-            return f"Error: {e}"
-        return f"'{alias}' pain limit set to {limit}%."
+    Args:
+        alias: Channel alias assigned at connect time
+        limit: Maximum strength percentage (0–100)
+    """
+    if not _config.get("pain_limit_exposed_to_llm", False):
+        return "set_pain_limit is disabled. Enable it in the web UI."
+    if limit < 0 or limit > 100:
+        return "Error: Limit must be 0–100."
+    try:
+        await manager.set_pain_limit(alias, limit)
+    except ValueError as e:
+        return f"Error: {e}"
+    return f"'{alias}' pain limit set to {limit}%."
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +400,6 @@ async def _main() -> None:
     from .ui import create_app, find_free_port, run_web_server
 
     _config = load_config()
-
-    if _config.get("pain_limit_exposed_to_llm", False):
-        _register_pain_limit_tool()
 
     port = find_free_port()
     _ui_url = f"http://localhost:{port}"

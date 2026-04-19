@@ -35,6 +35,14 @@ def is_lovense_name(name: str) -> bool:
     return any(name.startswith(p) for p in LOVENSE_NAME_PREFIXES)
 
 
+def lovense_model(name: str) -> str:
+    """Extract the model identifier from a Lovense BLE name (e.g. 'LVS-Domi' → 'Domi')."""
+    for prefix in LOVENSE_NAME_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 @dataclass
 class LovenseState:
     connected: bool = False

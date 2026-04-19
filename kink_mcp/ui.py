@@ -61,7 +61,6 @@ h1{font-size:16px;font-weight:700;color:#a78bfa}
 .tog.on{background:#6366f1}
 .togk{width:16px;height:16px;background:#94a3b8;border-radius:8px;position:absolute;top:2px;left:2px;transition:left .2s}
 .tog.on .togk{left:18px;background:white}
-.rnote{font-size:11px;color:#f59e0b;margin-top:6px;display:none}
 #rpop{display:none;position:fixed;background:#1e293b;border:1px solid #6366f1;border-radius:8px;padding:12px;width:230px;box-shadow:0 8px 24px rgba(0,0,0,.6);z-index:100}
 #rpop .rt{font-size:11px;color:#94a3b8;margin-bottom:8px}
 #rpop input{width:100%;background:#0f172a;border:1px solid #6366f1;color:#e2e8f0;padding:5px 8px;border-radius:4px;font-size:13px;outline:none}
@@ -87,9 +86,10 @@ h1{font-size:16px;font-weight:700;color:#a78bfa}
     <div id="scanres" style="margin-top:8px;"></div>
     <div id="cform" class="cf hidden" style="margin-top:10px;">
       <div style="font-size:11px;color:#94a3b8;margin-bottom:6px;" id="clbl"></div>
+      <div id="cerr" style="font-size:11px;color:#f87171;margin-bottom:4px;display:none;"></div>
       <input id="iaa" placeholder="Alias A (channel A)">
       <input id="iab" placeholder="Alias B (channel B)">
-      <button class="btn btn-success" style="width:100%;padding:6px;" onclick="doConnect()">&#128279; Connect</button>
+      <button class="btn btn-success" id="cbtn" style="width:100%;padding:6px;" onclick="doConnect()">&#128279; Connect</button>
       <button class="btn" style="width:100%;padding:4px;margin-top:4px;background:#1e293b;color:#94a3b8;border:1px solid #334155;" onclick="cancelCon()">Cancel</button>
     </div>
   </div>
@@ -102,13 +102,13 @@ h1{font-size:16px;font-weight:700;color:#a78bfa}
       <div class="tog" id="pltog"><div class="togk"></div></div>
     </div>
   </div>
-  <div id="rnote" class="rnote">&#9888; Restart kink-mcp for this change to take effect.</div>
   <div class="mhdr"><div class="lc"></div><div>Channel A</div><div>Channel B</div></div>
   <div id="pmatrix"></div>
 </div>
 <div id="rpop">
   <div class="rt" id="rtitle"></div>
   <input type="text" id="rinput" onkeydown="if(event.key==='Enter')saveRename();if(event.key==='Escape')closeRen();">
+  <div id="rwarn" style="font-size:11px;color:#f59e0b;margin-top:4px;display:none;"></div>
   <div class="ra">
     <button class="btn btn-primary" onclick="saveRename()">Save</button>
     <button class="btn" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;" onclick="closeRen()">Cancel</button>
@@ -117,13 +117,21 @@ h1{font-size:16px;font-weight:700;color:#a78bfa}
 <script>
 let S={devices:[],pain_limit_exposed_to_llm:false};
 let cdev=null,renS=null;
+let _disConfirm=null;
+let _forgetConfirm=null;
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 async function poll(){try{const r=await fetch('/api/status');if(!r.ok)return;S=await r.json();render();}catch(e){}}
 setInterval(poll,1000);poll();
 function render(){renderBadge();renderDevices();renderMatrix();renderToggle();}
 function renderBadge(){
   const n=S.devices.filter(d=>d.connected).length;
-  document.getElementById('sbadge').innerHTML=n>0?`<span class="ok">&#9679; ${n} device${n>1?'s':''} connected</span>`:'<span style="color:#94a3b8">No devices connected</span>';
+  const low=S.devices.filter(d=>d.connected&&d.battery>=0&&d.battery<30).length;
+  if(n>0){
+    const warn=low>0?` <span style="color:#f59e0b">&#9888; ${low} low battery</span>`:'';
+    document.getElementById('sbadge').innerHTML=`<span class="ok">&#9679; ${n} device${n>1?'s':''} connected</span>${warn}`;
+  }else{
+    document.getElementById('sbadge').innerHTML='<span style="color:#94a3b8">No devices connected</span>';
+  }
 }
 function renderDevices(){
   const el=document.getElementById('dlist');
@@ -135,7 +143,17 @@ function renderDevices(){
     const batt=d.battery>=0?`&#128267; ${d.battery}%`:(d.connected?'':'not found');
     const ba=d.connected?`<span class="abadge" onclick="openRen('${esc(d.alias_a)}','${esc(d.address)}','A',event)">A: ${esc(d.alias_a)} &#9998;</span>`:`<span class="abadge off">A: ${esc(d.alias_a)}</span>`;
     const bb=d.alias_b?(d.connected?`<span class="abadge" onclick="openRen('${esc(d.alias_b)}','${esc(d.address)}','B',event)">B: ${esc(d.alias_b)} &#9998;</span>`:`<span class="abadge off">B: ${esc(d.alias_b)}</span>`):'';
-    const abtn=d.connected?`<button class="btn btn-danger" onclick="doDis('${esc(d.address)}')">Disconnect</button>`:`<button class="btn btn-blue" onclick="doRetry('${esc(d.address)}')">&#8635; Retry</button>`;
+    let abtn;
+    if(d.connected){
+      abtn=_disConfirm&&_disConfirm.addr===d.address
+        ?`<button class="btn" style="background:#b45309;color:white" onclick="doDis('${esc(d.address)}')">Sure?</button>`
+        :`<button class="btn btn-danger" onclick="doDis('${esc(d.address)}')">Disconnect</button>`;
+    }else{
+      const fbtn=_forgetConfirm&&_forgetConfirm.addr===d.address
+        ?`<button class="btn" style="background:#b45309;color:white;margin-left:4px" onclick="doForget('${esc(d.address)}')">Sure?</button>`
+        :`<button class="btn btn-danger" style="margin-left:4px" onclick="doForget('${esc(d.address)}')">Forget</button>`;
+      abtn=`<button class="btn btn-blue" onclick="doRetry('${esc(d.address)}')">&#8635; Retry</button>${fbtn}`;
+    }
     return `<div class="device-row ${cls}"><div class="device-info"><span class="dname ${cls}">${dot} ${esc(d.device_type.toUpperCase())} ${esc(d.version.toUpperCase())}</span><span class="daddr">${esc(d.address)}</span><span class="dbatt">${batt}</span><div class="aliases">${ba}${bb}</div></div>${abtn}</div>`;
   }).join('');
 }
@@ -146,8 +164,8 @@ function renderMatrix(){
   el.innerHTML=coys.map(d=>{
     const dis=d.connected?'':'disabled';
     const la=d.limit_a??100;const lb=d.limit_b??100;
-    const ca=`<div class="mcell"><div class="malias">${esc(d.alias_a)}</div><input type="range" min="0" max="100" value="${la}" ${dis} oninput="this.nextElementSibling.textContent=this.value+'%'" onchange="setPL('${esc(d.alias_a)}',+this.value)"><div class="mval">${la}%</div></div>`;
-    const cb=d.alias_b?`<div class="mcell"><div class="malias">${esc(d.alias_b)}</div><input type="range" min="0" max="100" value="${lb}" ${dis} oninput="this.nextElementSibling.textContent=this.value+'%'" onchange="setPL('${esc(d.alias_b)}',+this.value)"><div class="mval">${lb}%</div></div>`:'<div class="mcell" style="opacity:.3"><div class="malias">&mdash;</div></div>';
+    const ca=`<div class="mcell"><div class="malias">${esc(d.alias_a)}</div><input type="range" min="0" max="100" value="${la}" ${dis} oninput="this.nextElementSibling.textContent=this.value+'%';debouncePL('${esc(d.alias_a)}',+this.value)" onchange="setPL('${esc(d.alias_a)}',+this.value)"><div class="mval">${la}%</div></div>`;
+    const cb=d.alias_b?`<div class="mcell"><div class="malias">${esc(d.alias_b)}</div><input type="range" min="0" max="100" value="${lb}" ${dis} oninput="this.nextElementSibling.textContent=this.value+'%';debouncePL('${esc(d.alias_b)}',+this.value)" onchange="setPL('${esc(d.alias_b)}',+this.value)"><div class="mval">${lb}%</div></div>`:'<div class="mcell" style="opacity:.3"><div class="malias">&mdash;</div></div>';
     const dot=d.connected?(d.battery>=0&&d.battery<30?'&#9679;':'&#9679;'):'&#10007;';
     const dotcol=d.connected?(d.battery>=0&&d.battery<30?'#f59e0b':'#34d399'):'#ef4444';
     return `<div class="mrow${d.connected?'':' off'}"><div class="mlbl"><span style="color:${dotcol}">${dot}</span> ${esc(d.device_type)} ${esc(d.version)} &middot; ${esc(d.address)}</div>${ca}${cb}</div>`;
@@ -170,7 +188,7 @@ async function doScan(){
     else if(!d.length){document.getElementById('scanst').textContent='No devices found.';}
     else{
       document.getElementById('scanst').textContent=`Found ${d.length} device${d.length>1?'s':''}.`;
-      document.getElementById('scanres').innerHTML=d.map(x=>`<div class="sr"><span>${esc(x.name)} <span style="color:#475569;font-size:11px">${esc(x.address)}</span></span><button class="btn btn-primary" onclick="showCF('${esc(x.address)}','${esc(x.name)}','${esc(x.type||x.version)}')">Connect</button></div>`).join('');
+      document.getElementById('scanres').innerHTML=d.map(x=>`<div class="sr" data-addr="${esc(x.address)}"><span>${esc(x.name)} <span style="color:#475569;font-size:11px">${esc(x.address)}</span></span><button class="btn btn-primary" onclick="showCF('${esc(x.address)}','${esc(x.name)}','${esc(x.type||x.version)}')">Connect</button></div>`).join('');
     }
   }catch(e){document.getElementById('scanst').textContent='Scan failed.';}
   finally{btn.disabled=false;btn.innerHTML='&#128269; Scan for Devices';}
@@ -179,31 +197,55 @@ function showCF(addr,name,dtype){
   cdev={addr,name,dtype};
   document.getElementById('clbl').textContent='Connect \u2014 '+name;
   document.getElementById('iab').style.display=dtype==='lovense'?'none':'block';
-  document.getElementById('iaa').value='';document.getElementById('iab').value='';
+  const known=S.devices.find(d=>d.address===addr);
+  document.getElementById('iaa').value=known?known.alias_a:'';
+  document.getElementById('iab').value=known&&known.alias_b?known.alias_b:'';
+  document.getElementById('cerr').style.display='none';
+  document.getElementById('cbtn').disabled=false;
+  document.getElementById('cbtn').innerHTML='&#128279; Connect';
   document.getElementById('cform').classList.remove('hidden');
   document.getElementById('iaa').focus();
 }
-function cancelCon(){cdev=null;document.getElementById('cform').classList.add('hidden');}
+function cancelCon(){cdev=null;document.getElementById('cform').classList.add('hidden');document.getElementById('cerr').style.display='none';const cbtn=document.getElementById('cbtn');cbtn.disabled=false;cbtn.innerHTML='&#128279; Connect';}
 async function doConnect(){
   if(!cdev)return;
+  const errEl=document.getElementById('cerr');
+  errEl.style.display='none';
   const aa=document.getElementById('iaa').value.trim();
   const ab=document.getElementById('iab').value.trim();
-  if(!aa){alert('Alias A is required.');return;}
-  if(cdev.dtype!=='lovense'&&!ab){alert('Alias B is required for Coyote.');return;}
+  if(!aa){errEl.textContent='Alias A is required.';errEl.style.display='block';return;}
+  if(cdev.dtype!=='lovense'&&!ab){errEl.textContent='Alias B is required for Coyote.';errEl.style.display='block';return;}
+  const cbtn=document.getElementById('cbtn');
+  cbtn.disabled=true;cbtn.innerHTML='&#9203; Connecting...';
   try{
     const r=await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:cdev.addr,alias_a:aa,alias_b:ab||null})});
     const d=await r.json();
-    if(d.error){alert(d.error);return;}
+    if(d.error){errEl.textContent=d.error;errEl.style.display='block';cbtn.disabled=false;cbtn.innerHTML='&#128279; Connect';return;}
     cancelCon();
-    document.getElementById('scanres').innerHTML='';
-    document.getElementById('scanst').textContent='';
+    const row=document.querySelector('#scanres .sr[data-addr="'+cdev.addr+'"]');
+    if(row)row.remove();
     poll();
-  }catch(e){alert('Connection failed.');}
+  }catch(e){errEl.textContent='Connection failed.';errEl.style.display='block';cbtn.disabled=false;cbtn.innerHTML='&#128279; Connect';}
 }
-async function doDis(addr){
-  if(!confirm('Disconnect this device?'))return;
-  await fetch('/api/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:addr})});
-  poll();
+function doDis(addr){
+  if(_disConfirm&&_disConfirm.addr===addr){
+    clearTimeout(_disConfirm.timer);_disConfirm=null;
+    fetch('/api/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:addr})}).then(()=>poll());
+    return;
+  }
+  if(_disConfirm){clearTimeout(_disConfirm.timer);}
+  _disConfirm={addr,timer:setTimeout(()=>{_disConfirm=null;render();},3000)};
+  render();
+}
+function doForget(addr){
+  if(_forgetConfirm&&_forgetConfirm.addr===addr){
+    clearTimeout(_forgetConfirm.timer);_forgetConfirm=null;
+    fetch('/api/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:addr})}).then(()=>poll());
+    return;
+  }
+  if(_forgetConfirm){clearTimeout(_forgetConfirm.timer);}
+  _forgetConfirm={addr,timer:setTimeout(()=>{_forgetConfirm=null;render();},3000)};
+  render();
 }
 async function doRetry(addr){
   try{
@@ -227,6 +269,16 @@ function openRen(alias,addr,ch,ev){
   ev.stopPropagation();
 }
 function closeRen(){renS=null;document.getElementById('rpop').style.display='none';}
+document.getElementById('rinput').addEventListener('input',function(){
+  if(!renS)return;
+  const nv=this.value.trim();
+  const warn=document.getElementById('rwarn');
+  if(nv&&nv!==renS.alias){
+    const dup=S.devices.some(d=>(d.alias_a===nv||d.alias_b===nv)&&d.address!==renS.addr);
+    warn.style.display=dup?'block':'none';
+    warn.textContent='This alias is already used — commands will be synced.';
+  }else{warn.style.display='none';}
+});
 async function saveRename(){
   if(!renS)return;
   const nv=document.getElementById('rinput').value.trim();
@@ -239,6 +291,8 @@ async function saveRename(){
     closeRen();poll();
   }catch(e){alert('Rename failed.');}
 }
+let _plTimer=null;
+function debouncePL(alias,val){clearTimeout(_plTimer);_plTimer=setTimeout(()=>setPL(alias,val),300);}
 async function setPL(alias,limit){
   await fetch('/api/pain_limit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alias,limit})});
 }
@@ -246,7 +300,6 @@ async function togglePL(){
   const nv=!S.pain_limit_exposed_to_llm;
   S.pain_limit_exposed_to_llm=nv;
   renderToggle();
-  document.getElementById('rnote').style.display='block';
   await fetch('/api/pain_limit_toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exposed:nv})});
 }
 document.addEventListener('click',e=>{
@@ -391,6 +444,18 @@ async def handle_rename(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=400)
 
 
+async def handle_forget(request: web.Request) -> web.Response:
+    manager: DeviceManager = request.app["manager"]
+    config: dict = request.app["config"]
+    try:
+        body = await request.json()
+        manager.forget_device(body["address"])
+        _sync_config(manager, config)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
 async def handle_pain_limit(request: web.Request) -> web.Response:
     manager: DeviceManager = request.app["manager"]
     config: dict = request.app["config"]
@@ -430,6 +495,7 @@ def create_app(manager: DeviceManager, config: dict) -> web.Application:
     app.router.add_post("/api/disconnect", handle_disconnect)
     app.router.add_post("/api/retry", handle_retry)
     app.router.add_post("/api/rename", handle_rename)
+    app.router.add_post("/api/forget", handle_forget)
     app.router.add_post("/api/pain_limit", handle_pain_limit)
     app.router.add_post("/api/pain_limit_toggle", handle_pain_limit_toggle)
     return app

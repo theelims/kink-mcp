@@ -208,3 +208,96 @@ def test_rename_alias_transfers_activity_timestamp():
 
     assert m._alias_last_activity.get("new_name") == ts
     assert "old" not in m._alias_last_activity
+
+
+# --- forget_device ---
+
+def test_forget_device_removes_meta():
+    m = _make_manager()
+    m._device_meta["AA:BB:CC"] = {
+        "address": "AA:BB:CC", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "left", "alias_b": "right",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    m.forget_device("AA:BB:CC")
+    assert "AA:BB:CC" not in m._device_meta
+
+
+def test_forget_device_unknown_raises():
+    m = _make_manager()
+    with pytest.raises(ValueError, match="Unknown device"):
+        m.forget_device("FF:FF:FF")
+
+
+def test_forget_device_connected_raises():
+    m = _make_manager()
+    dev = _make_mock_device("AA:BB:CC", connected=True)
+    m._devices.append(dev)
+    m._alias_map["left"] = [(dev, "A")]
+    m._device_meta["AA:BB:CC"] = {
+        "address": "AA:BB:CC", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "left", "alias_b": "right",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    with pytest.raises(ValueError, match="Cannot forget a connected"):
+        m.forget_device("AA:BB:CC")
+
+
+def test_forget_device_cleans_aliases():
+    m = _make_manager()
+    m._alias_map["left"] = []
+    m._alias_map["right"] = []
+    m._device_meta["AA:BB:CC"] = {
+        "address": "AA:BB:CC", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "left", "alias_b": "right",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    m.forget_device("AA:BB:CC")
+    assert "AA:BB:CC" not in m._device_meta
+    assert "left" not in m._alias_map
+    assert "right" not in m._alias_map
+
+
+def test_forget_device_keeps_shared_alias_for_other_device():
+    m = _make_manager()
+    dev = _make_mock_device("DD:EE:FF", connected=True)
+    m._devices.append(dev)
+    m._alias_map["shared"] = [(dev, "A")]
+    m._device_meta["AA:BB:CC"] = {
+        "address": "AA:BB:CC", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "shared", "alias_b": "right",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    m._device_meta["DD:EE:FF"] = {
+        "address": "DD:EE:FF", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "shared", "alias_b": "other",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    m.forget_device("AA:BB:CC")
+    assert "AA:BB:CC" not in m._device_meta
+    assert "shared" in m._alias_map
+    assert len(m._alias_map["shared"]) == 1
+
+
+def test_forget_device_removes_disconnected_dev_object():
+    m = _make_manager()
+    dev = _make_mock_device("AA:BB:CC", connected=False)
+    m._devices.append(dev)
+    m._alias_map["left"] = [(dev, "A")]
+    m._alias_map["right"] = [(dev, "B")]
+    m._device_meta["AA:BB:CC"] = {
+        "address": "AA:BB:CC", "name": "Coyote V3",
+        "device_type": "coyote", "version": "v3",
+        "alias_a": "left", "alias_b": "right",
+        "limit_a_pct": 50, "limit_b_pct": 50,
+    }
+    m.forget_device("AA:BB:CC")
+    assert "AA:BB:CC" not in m._device_meta
+    assert dev not in m._devices
+    assert "left" not in m._alias_map
+    assert "right" not in m._alias_map

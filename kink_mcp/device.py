@@ -8,7 +8,7 @@ from datetime import datetime
 import humanize
 from bleak import BleakClient, BleakScanner, BLEDevice
 
-from .lovense import LovenseDevice, is_lovense_name, LOVENSE_NAME_PREFIXES
+from .lovense import LovenseDevice, is_lovense_name, LOVENSE_NAME_PREFIXES, lovense_model
 from .protocol import (
     BATTERY_UUID,
     DEVICE_NAME_PREFIX,
@@ -589,7 +589,7 @@ class DeviceManager:
                 "address": address,
                 "name": name,
                 "device_type": "lovense",
-                "version": "",
+                "version": lovense_model(name),
                 "alias_a": alias_a,
                 "alias_b": None,
                 "limit_a_pct": existing.get("limit_a_pct", 100),
@@ -716,6 +716,32 @@ class DeviceManager:
                 meta["alias_a"] = new_alias
             if meta.get("alias_b") == old_alias:
                 meta["alias_b"] = new_alias
+
+    def forget_device(self, address: str) -> None:
+        """Remove an offline device from tracking, clearing its metadata and aliases."""
+        if address not in self._device_meta:
+            raise ValueError(f"Unknown device '{address}'.")
+        dev = next((d for d in self._devices if d.state.address == address), None)
+        if dev is not None and dev.state.connected:
+            raise ValueError("Cannot forget a connected device. Disconnect it first.")
+        meta = self._device_meta[address]
+        for alias_key in ("alias_a", "alias_b"):
+            alias = meta.get(alias_key)
+            if not alias or alias not in self._alias_map:
+                continue
+            if dev is not None:
+                entries = [(d, ch) for d, ch in self._alias_map[alias] if d is not dev]
+            else:
+                entries = [(d, ch) for d, ch in self._alias_map[alias]
+                           if d.state.address != address]
+            if entries:
+                self._alias_map[alias] = entries
+            else:
+                del self._alias_map[alias]
+                self._alias_last_activity.pop(alias, None)
+        if dev is not None:
+            self._devices.remove(dev)
+        del self._device_meta[address]
 
     def _resolve(self, alias: str) -> list[tuple[CoyoteDevice | LovenseDevice, str]]:
         """Resolve an alias to a list of (device, channel) pairs.
